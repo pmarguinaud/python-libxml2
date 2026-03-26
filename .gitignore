@@ -10,3 +10,12 @@ __pycache__/
 
 # The Perl source distribution (reference only, not our code)
 XML-LibXML-2.0210/
+
+# User scripts and their output directories
+libxml2.pl
+libxml2.py
+libxml2.pl.d/
+libxml2.py.d/
+libxml2.pl.eo
+libxml2.py.eo
+arpifs/
