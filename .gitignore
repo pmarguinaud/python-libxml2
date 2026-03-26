@@ -1,0 +1,12 @@
+# Build artifacts
+build/
+*.so
+*.egg-info/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+
+# The Perl source distribution (reference only, not our code)
+XML-LibXML-2.0210/

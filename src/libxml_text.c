@@ -1,0 +1,385 @@
+#include "libxml_text.h"
+#include "libxml_utils.h"
+#include "libxml_document.h"
+
+/* ------------------------------------------------------------------ */
+/* CharacterData shared helpers                                        */
+/* ------------------------------------------------------------------ */
+
+static PyObject *
+chardata_get_data(LibXML_NodeObject *self, void *closure)
+{
+    xmlChar *content = xmlNodeGetContent(self->node);
+    if (content == NULL) return PyUnicode_FromString("");
+    PyObject *ret = PyUnicode_FromString((const char *)content);
+    xmlFree(content);
+    return ret;
+}
+
+static int
+chardata_set_data(LibXML_NodeObject *self, PyObject *value, void *closure)
+{
+    if (value == NULL || value == Py_None) {
+        xmlNodeSetContent(self->node, BAD_CAST "");
+        return 0;
+    }
+    const char *s = PyUnicode_AsUTF8(value);
+    if (s == NULL) return -1;
+    xmlNodeSetContent(self->node, BAD_CAST s);
+    return 0;
+}
+
+static PyObject *
+chardata_setData(LibXML_NodeObject *self, PyObject *args)
+{
+    const char *data;
+    if (!PyArg_ParseTuple(args, "s", &data)) return NULL;
+    xmlNodeSetContent(self->node, BAD_CAST data);
+    Py_RETURN_NONE;
+}
+
+static PyObject *
+chardata_substringData(LibXML_NodeObject *self, PyObject *args)
+{
+    int offset, length;
+    if (!PyArg_ParseTuple(args, "ii", &offset, &length)) return NULL;
+    xmlChar *content = xmlNodeGetContent(self->node);
+    if (!content) return PyUnicode_FromString("");
+    int total = (int)xmlStrlen(content);
+    if (offset < 0) offset = 0;
+    if (offset > total) offset = total;
+    if (offset + length > total) length = total - offset;
+    if (length < 0) length = 0;
+    PyObject *ret = PyUnicode_FromStringAndSize((const char *)content + offset, length);
+    xmlFree(content);
+    return ret;
+}
+
+static PyObject *
+chardata_appendData(LibXML_NodeObject *self, PyObject *args)
+{
+    const char *data;
+    if (!PyArg_ParseTuple(args, "s", &data)) return NULL;
+    xmlNodeAddContent(self->node, BAD_CAST data);
+    Py_RETURN_NONE;
+}
+
+static PyObject *
+chardata_insertData(LibXML_NodeObject *self, PyObject *args)
+{
+    int offset;
+    const char *data;
+    if (!PyArg_ParseTuple(args, "is", &offset, &data)) return NULL;
+
+    xmlChar *old = xmlNodeGetContent(self->node);
+    if (!old) old = xmlStrdup(BAD_CAST "");
+    int total = (int)xmlStrlen(old);
+    if (offset < 0) offset = 0;
+    if (offset > total) offset = total;
+
+    xmlChar *newval = xmlMalloc(total + strlen(data) + 1);
+    if (!newval) { xmlFree(old); return PyErr_NoMemory(); }
+    memcpy(newval, old, offset);
+    strcpy((char *)newval + offset, data);
+    memcpy(newval + offset + strlen(data), old + offset, total - offset + 1);
+    xmlNodeSetContent(self->node, newval);
+    xmlFree(old);
+    xmlFree(newval);
+    Py_RETURN_NONE;
+}
+
+static PyObject *
+chardata_deleteData(LibXML_NodeObject *self, PyObject *args)
+{
+    int offset, length;
+    if (!PyArg_ParseTuple(args, "ii", &offset, &length)) return NULL;
+
+    xmlChar *old = xmlNodeGetContent(self->node);
+    if (!old) Py_RETURN_NONE;
+    int total = (int)xmlStrlen(old);
+    if (offset < 0) offset = 0;
+    if (offset > total) { xmlFree(old); Py_RETURN_NONE; }
+    if (offset + length > total) length = total - offset;
+
+    xmlChar *newval = xmlMalloc(total - length + 1);
+    if (!newval) { xmlFree(old); return PyErr_NoMemory(); }
+    memcpy(newval, old, offset);
+    memcpy(newval + offset, old + offset + length, total - offset - length + 1);
+    xmlNodeSetContent(self->node, newval);
+    xmlFree(old);
+    xmlFree(newval);
+    Py_RETURN_NONE;
+}
+
+static PyObject *
+chardata_deleteDataString(LibXML_NodeObject *self, PyObject *args)
+{
+    const char *target;
+    int all = 0;
+    if (!PyArg_ParseTuple(args, "s|i", &target, &all)) return NULL;
+
+    xmlChar *old = xmlNodeGetContent(self->node);
+    if (!old) Py_RETURN_NONE;
+
+    xmlChar *pos = xmlStrstr(old, BAD_CAST target);
+    if (!pos) { xmlFree(old); Py_RETURN_NONE; }
+
+    int tlen = (int)strlen(target);
+    do {
+        int before = (int)(pos - old);
+        int total  = (int)xmlStrlen(old);
+        int after  = total - before - tlen;
+        xmlChar *newval = xmlMalloc(total - tlen + 1);
+        if (!newval) { xmlFree(old); return PyErr_NoMemory(); }
+        memcpy(newval, old, before);
+        memcpy(newval + before, pos + tlen, after + 1);
+        xmlFree(old);
+        old = newval;
+        if (!all) break;
+        pos = xmlStrstr(old, BAD_CAST target);
+    } while (pos);
+
+    xmlNodeSetContent(self->node, old);
+    xmlFree(old);
+    Py_RETURN_NONE;
+}
+
+static PyObject *
+chardata_replaceData(LibXML_NodeObject *self, PyObject *args)
+{
+    int offset, length;
+    const char *data;
+    if (!PyArg_ParseTuple(args, "iis", &offset, &length, &data)) return NULL;
+
+    xmlChar *old = xmlNodeGetContent(self->node);
+    if (!old) old = xmlStrdup(BAD_CAST "");
+    int total = (int)xmlStrlen(old);
+    if (offset < 0) offset = 0;
+    if (offset > total) offset = total;
+    if (offset + length > total) length = total - offset;
+
+    int dlen   = (int)strlen(data);
+    int newlen = total - length + dlen;
+    xmlChar *newval = xmlMalloc(newlen + 1);
+    if (!newval) { xmlFree(old); return PyErr_NoMemory(); }
+    memcpy(newval, old, offset);
+    memcpy(newval + offset, data, dlen);
+    memcpy(newval + offset + dlen, old + offset + length, total - offset - length + 1);
+    xmlNodeSetContent(self->node, newval);
+    xmlFree(old);
+    xmlFree(newval);
+    Py_RETURN_NONE;
+}
+
+static PyObject *
+chardata_replaceDataString(LibXML_NodeObject *self, PyObject *args)
+{
+    const char *old_str, *new_str;
+    int all = 0;
+    if (!PyArg_ParseTuple(args, "ss|i", &old_str, &new_str, &all)) return NULL;
+
+    xmlChar *content = xmlNodeGetContent(self->node);
+    if (!content) Py_RETURN_NONE;
+
+    int olen = (int)strlen(old_str);
+    int nlen = (int)strlen(new_str);
+    xmlChar *pos;
+
+    do {
+        pos = xmlStrstr(content, BAD_CAST old_str);
+        if (!pos) break;
+        int before = (int)(pos - content);
+        int total  = (int)xmlStrlen(content);
+        int after  = total - before - olen;
+        xmlChar *newval = xmlMalloc(total - olen + nlen + 1);
+        if (!newval) { xmlFree(content); return PyErr_NoMemory(); }
+        memcpy(newval, content, before);
+        memcpy(newval + before, new_str, nlen);
+        memcpy(newval + before + nlen, pos + olen, after + 1);
+        xmlFree(content);
+        content = newval;
+    } while (all && (pos = xmlStrstr(content, BAD_CAST old_str)));
+
+    xmlNodeSetContent(self->node, content);
+    xmlFree(content);
+    Py_RETURN_NONE;
+}
+
+static PyGetSetDef chardata_getset[] = {
+    {"data", (getter)chardata_get_data, (setter)chardata_set_data, "Character data", NULL},
+    {NULL}
+};
+
+static PyObject *
+chardata_getData(LibXML_NodeObject *self, PyObject *args)
+{
+    return chardata_get_data(self, NULL);
+}
+
+static PyObject *
+chardata_string_value(LibXML_NodeObject *self, PyObject *args)
+{
+    return chardata_get_data(self, NULL);
+}
+
+static PyMethodDef chardata_methods[] = {
+    {"setData",           (PyCFunction)chardata_setData,           METH_VARARGS, "Set data"},
+    {"getData",           (PyCFunction)chardata_getData,           METH_NOARGS,  "Get data"},
+    {"substringData",     (PyCFunction)chardata_substringData,     METH_VARARGS, "Get substring"},
+    {"appendData",        (PyCFunction)chardata_appendData,        METH_VARARGS, "Append data"},
+    {"insertData",        (PyCFunction)chardata_insertData,        METH_VARARGS, "Insert data at offset"},
+    {"deleteData",        (PyCFunction)chardata_deleteData,        METH_VARARGS, "Delete data range"},
+    {"deleteDataString",  (PyCFunction)chardata_deleteDataString,  METH_VARARGS, "Delete first/all occurrences of string"},
+    {"replaceData",       (PyCFunction)chardata_replaceData,       METH_VARARGS, "Replace data range"},
+    {"replaceDataString", (PyCFunction)chardata_replaceDataString, METH_VARARGS, "Replace string occurrences"},
+    {"string_value",      (PyCFunction)chardata_string_value,      METH_NOARGS,  "Return text content"},
+    {NULL, NULL}
+};
+
+/* ------------------------------------------------------------------ */
+/* Text tp_new                                                         */
+/* ------------------------------------------------------------------ */
+
+static PyObject *
+LibXML_Text_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
+{
+    const char *content = "";
+    if (!PyArg_ParseTuple(args, "|s", &content)) return NULL;
+    xmlNodePtr node = xmlNewText(BAD_CAST content);
+    if (!node) { PyErr_NoMemory(); return NULL; }
+    PyObject *result = LibXML_Node_Wrap(node, NULL);
+    if (result) ((LibXML_NodeObject *)result)->owned = 1;
+    return result;
+}
+
+static PyObject *
+LibXML_Comment_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
+{
+    const char *content = "";
+    if (!PyArg_ParseTuple(args, "|s", &content)) return NULL;
+    xmlNodePtr node = xmlNewComment(BAD_CAST content);
+    if (!node) { PyErr_NoMemory(); return NULL; }
+    PyObject *result = LibXML_Node_Wrap(node, NULL);
+    if (result) ((LibXML_NodeObject *)result)->owned = 1;
+    return result;
+}
+
+static PyObject *
+LibXML_CDATASection_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
+{
+    const char *content = "";
+    if (!PyArg_ParseTuple(args, "|s", &content)) return NULL;
+    xmlNodePtr node = xmlNewCDataBlock(NULL, BAD_CAST content, (int)strlen(content));
+    if (!node) { PyErr_NoMemory(); return NULL; }
+    PyObject *result = LibXML_Node_Wrap(node, NULL);
+    if (result) ((LibXML_NodeObject *)result)->owned = 1;
+    return result;
+}
+
+static PyObject *
+LibXML_PI_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
+{
+    const char *target, *data = NULL;
+    if (!PyArg_ParseTuple(args, "s|s", &target, &data)) return NULL;
+    xmlNodePtr node = xmlNewPI(BAD_CAST target, data ? BAD_CAST data : NULL);
+    if (!node) { PyErr_NoMemory(); return NULL; }
+    PyObject *result = LibXML_Node_Wrap(node, NULL);
+    if (result) ((LibXML_NodeObject *)result)->owned = 1;
+    return result;
+}
+
+/* PI-specific methods */
+static PyObject *
+pi_get_target(LibXML_NodeObject *self, void *closure)
+{
+    if (!self->node->name) Py_RETURN_NONE;
+    return PyUnicode_FromString((const char *)self->node->name);
+}
+
+static PyObject *
+pi_get_data(LibXML_NodeObject *self, void *closure)
+{
+    return chardata_get_data(self, closure);
+}
+
+static int
+pi_set_data(LibXML_NodeObject *self, PyObject *value, void *closure)
+{
+    return chardata_set_data(self, value, closure);
+}
+
+static PyObject *
+pi_setData(LibXML_NodeObject *self, PyObject *args)
+{
+    return chardata_setData(self, args);
+}
+
+static PyGetSetDef pi_getset[] = {
+    {"target", (getter)pi_get_target, NULL,           "PI target", NULL},
+    {"data",   (getter)pi_get_data,   (setter)pi_set_data, "PI data", NULL},
+    {NULL}
+};
+
+static PyObject *
+pi_getData(LibXML_NodeObject *self, PyObject *args)
+{
+    return chardata_get_data(self, NULL);
+}
+
+static PyMethodDef pi_methods[] = {
+    {"setData", (PyCFunction)pi_setData, METH_VARARGS, "Set PI data"},
+    {"getData", (PyCFunction)pi_getData, METH_NOARGS,  "Get PI data"},
+    {NULL, NULL}
+};
+
+/* ------------------------------------------------------------------ */
+/* Type definitions                                                    */
+/* ------------------------------------------------------------------ */
+
+PyTypeObject LibXML_TextType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name      = "xml_libxml.Text",
+    .tp_basicsize = sizeof(LibXML_NodeObject),
+    .tp_flags     = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
+    .tp_base      = &LibXML_NodeType,
+    .tp_new       = LibXML_Text_new,
+    .tp_methods   = chardata_methods,
+    .tp_getset    = chardata_getset,
+    .tp_doc       = "DOM Text node",
+};
+
+PyTypeObject LibXML_CommentType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name      = "xml_libxml.Comment",
+    .tp_basicsize = sizeof(LibXML_NodeObject),
+    .tp_flags     = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
+    .tp_base      = &LibXML_NodeType,
+    .tp_new       = LibXML_Comment_new,
+    .tp_methods   = chardata_methods,
+    .tp_getset    = chardata_getset,
+    .tp_doc       = "DOM Comment node",
+};
+
+PyTypeObject LibXML_CDATASectionType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name      = "xml_libxml.CDATASection",
+    .tp_basicsize = sizeof(LibXML_NodeObject),
+    .tp_flags     = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
+    .tp_base      = &LibXML_NodeType,
+    .tp_new       = LibXML_CDATASection_new,
+    .tp_methods   = chardata_methods,
+    .tp_getset    = chardata_getset,
+    .tp_doc       = "DOM CDATASection node",
+};
+
+PyTypeObject LibXML_PIType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name      = "xml_libxml.PI",
+    .tp_basicsize = sizeof(LibXML_NodeObject),
+    .tp_flags     = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
+    .tp_base      = &LibXML_NodeType,
+    .tp_new       = LibXML_PI_new,
+    .tp_methods   = pi_methods,
+    .tp_getset    = pi_getset,
+    .tp_doc       = "DOM ProcessingInstruction node",
+};
