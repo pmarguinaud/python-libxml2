@@ -198,6 +198,24 @@ def test_findnodes_parent_axis():
     assert xc.getContextNode().isSameNode(doc.getDocumentElement())
 
 
+def test_empty_ctx_findnodes_with_node():
+    """XPathContext() vide + nœud passé directement à findnodes/find/findvalue."""
+    doc = Parser().parse_string(
+        '<root xmlns:f="http://fxtran.net/#syntax"><f:n>FOO</f:n><f:n>BAR</f:n></root>'
+    )
+    xc = XPathContext()
+    xc.registerNs('f', 'http://fxtran.net/#syntax')
+    # findnodes avec doc comme contexte (le cas du script libxml2.py)
+    nodes = list(xc.findnodes('.//f:n/text()', doc))
+    assert len(nodes) == 2
+    assert nodes[0].textContent == 'FOO'
+    # find et findvalue aussi
+    count = xc.find('count(.//f:n)', doc)
+    assert count == 2.0
+    val = xc.findvalue('string(.//f:n)', doc)
+    assert val == 'FOO'
+
+
 def test_no_segfault_setContextNode_none():
     """Setting context node to None then back to a doc should not crash."""
     xc = XPathContext()

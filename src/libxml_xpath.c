@@ -97,6 +97,48 @@ xpc_replay_ns(xmlXPathContextPtr ctx, PyObject *ns_dict)
     }
 }
 
+/* Apply a temporary context node for a single eval.
+ * Returns the previously saved xmlNodePtr (to restore after eval),
+ * or (xmlNodePtr)-1 on error (Python exception already set).
+ * Also updates self->doc_obj if the document changes. */
+static xmlNodePtr
+xpc_apply_node(LibXML_XPathContextObject *self, LibXML_NodeObject *ctx_node)
+{
+    xmlDocPtr doc;
+    PyObject *new_doc_obj;
+    if (ctx_node->doc_obj == NULL) {
+        doc = (xmlDocPtr)ctx_node->node;
+        new_doc_obj = (PyObject *)ctx_node;
+    } else {
+        doc = (xmlDocPtr)LibXML_NODE(ctx_node->doc_obj);
+        new_doc_obj = ctx_node->doc_obj;
+    }
+
+    if (self->ctx == NULL) {
+        self->ctx = xmlXPathNewContext(doc);
+        if (!self->ctx) { PyErr_NoMemory(); return (xmlNodePtr)-1; }
+        xpc_replay_ns(self->ctx, self->ns_dict);
+        Py_XINCREF(new_doc_obj);
+        Py_XDECREF(self->doc_obj);
+        self->doc_obj = new_doc_obj;
+    } else if (self->ctx->doc != doc) {
+        void *userData = self->ctx->userData;
+        self->ctx->userData = NULL;
+        xmlXPathFreeContext(self->ctx);
+        self->ctx = xmlXPathNewContext(doc);
+        if (!self->ctx) { PyErr_NoMemory(); return (xmlNodePtr)-1; }
+        self->ctx->userData = userData;
+        xpc_replay_ns(self->ctx, self->ns_dict);
+        Py_XINCREF(new_doc_obj);
+        Py_XDECREF(self->doc_obj);
+        self->doc_obj = new_doc_obj;
+    }
+
+    xmlNodePtr saved = self->ctx->node;
+    self->ctx->node = ctx_node->node;
+    return saved;
+}
+
 static PyObject *
 LibXML_XPathContext_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 {
@@ -240,7 +282,10 @@ xpc_findnodes(LibXML_XPathContextObject *self, PyObject *args)
         return NULL;
 
     xmlNodePtr saved = self->ctx ? self->ctx->node : NULL;
-    if (ctx_node && self->ctx) self->ctx->node = ctx_node->node;
+    if (ctx_node) {
+        saved = xpc_apply_node(self, ctx_node);
+        if (saved == (xmlNodePtr)-1) return NULL;
+    }
 
     xmlXPathObjectPtr xobj = xpc_eval(self, expr);
     if (self->ctx) self->ctx->node = saved;
@@ -264,7 +309,10 @@ xpc_find(LibXML_XPathContextObject *self, PyObject *args)
         return NULL;
 
     xmlNodePtr saved = self->ctx ? self->ctx->node : NULL;
-    if (ctx_node && self->ctx) self->ctx->node = ctx_node->node;
+    if (ctx_node) {
+        saved = xpc_apply_node(self, ctx_node);
+        if (saved == (xmlNodePtr)-1) return NULL;
+    }
 
     xmlXPathObjectPtr xobj = xpc_eval(self, expr);
     if (self->ctx) self->ctx->node = saved;
@@ -284,7 +332,10 @@ xpc_findvalue(LibXML_XPathContextObject *self, PyObject *args)
         return NULL;
 
     xmlNodePtr saved = self->ctx ? self->ctx->node : NULL;
-    if (ctx_node && self->ctx) self->ctx->node = ctx_node->node;
+    if (ctx_node) {
+        saved = xpc_apply_node(self, ctx_node);
+        if (saved == (xmlNodePtr)-1) return NULL;
+    }
 
     xmlXPathObjectPtr xobj = xpc_eval(self, expr);
     if (self->ctx) self->ctx->node = saved;
