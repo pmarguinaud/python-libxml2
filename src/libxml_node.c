@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include "libxml_node.h"
 #include "libxml_utils.h"
 #include "libxml_document.h"
@@ -22,10 +23,20 @@ LibXML_Node_dealloc(LibXML_NodeObject *self)
             if (self->owned)
                 xmlFreeNs((xmlNsPtr)self->node);
         } else {
-            /* Clear the _private back-pointer (borrowed ref) */
-            if (self->node->_private == (void *)self)
-                self->node->_private = NULL;
-            /* Free libxml2 memory only if we own a detached subtree */
+            /* Disconnect wrapper from the LibXML_NodePrivate struct */
+            LibXML_NodePrivate *priv = (LibXML_NodePrivate *)self->node->_private;
+            if (priv && priv->wrapper == (PyObject *)self) {
+                priv->wrapper = NULL;
+                /* Eagerly free struct if no cargo remains (avoids leaks on
+                 * non-owned nodes whose document may outlive us for a while) */
+                if (priv->cargo == NULL) {
+                    free(priv);
+                    self->node->_private = NULL;
+                }
+            }
+            /* Free libxml2 memory only if we own a detached subtree.
+             * xmlFreeNode triggers the deregister callback which handles
+             * any remaining cargo in the struct. */
             if (self->owned)
                 xmlFreeNode(self->node);
         }
@@ -643,9 +654,7 @@ do_normalize(xmlNodePtr node)
             xmlNodeAddContent(child, next->content);
             xmlNodePtr to_free = next;
             next = to_free->next;
-            if (to_free->_private)
-                ((LibXML_NodeObject *)to_free->_private)->node = NULL;
-            to_free->_private = NULL;
+            /* deregister callback handles priv cleanup and wrapper->node = NULL */
             xmlUnlinkNode(to_free);
             xmlFreeNode(to_free);
         } else {
@@ -1012,6 +1021,51 @@ node_unique_key(LibXML_NodeObject *self, PyObject *args)
 }
 
 /* ------------------------------------------------------------------ */
+/* cargo: user-defined Python object attached to this node            */
+/* ------------------------------------------------------------------ */
+
+static PyObject *
+node_getCargo(LibXML_NodeObject *self, PyObject *args)
+{
+    if (self->node == NULL || self->node->type == XML_NAMESPACE_DECL)
+        Py_RETURN_NONE;
+    LibXML_NodePrivate *priv = (LibXML_NodePrivate *)self->node->_private;
+    if (!priv || !priv->cargo) Py_RETURN_NONE;
+    Py_INCREF(priv->cargo);
+    return priv->cargo;
+}
+
+static PyObject *
+node_setCargo(LibXML_NodeObject *self, PyObject *args)
+{
+    if (self->node == NULL || self->node->type == XML_NAMESPACE_DECL) {
+        PyErr_SetString(PyExc_TypeError, "cannot set cargo on this node type");
+        return NULL;
+    }
+    PyObject *cargo;
+    if (!PyArg_ParseTuple(args, "O", &cargo)) return NULL;
+
+    LibXML_NodePrivate *priv = (LibXML_NodePrivate *)self->node->_private;
+    if (!priv) {
+        priv = (LibXML_NodePrivate *)calloc(1, sizeof(LibXML_NodePrivate));
+        if (!priv) return PyErr_NoMemory();
+        priv->wrapper = (PyObject *)self;
+        self->node->_private = priv;
+    }
+
+    PyObject *old = priv->cargo;
+    if (cargo == Py_None) {
+        priv->cargo = NULL;
+    } else {
+        Py_INCREF(cargo);
+        priv->cargo = cargo;
+    }
+    Py_XDECREF(old);
+
+    Py_RETURN_NONE;
+}
+
+/* ------------------------------------------------------------------ */
 /* Method table                                                        */
 /* ------------------------------------------------------------------ */
 
@@ -1045,6 +1099,8 @@ static PyMethodDef LibXML_Node_methods[] = {
     {"attributes",           (PyCFunction)node_attributes,            METH_NOARGS,  "Return list of Attr nodes"},
     {"unique_key",           (PyCFunction)node_unique_key,            METH_NOARGS,  "Return unique integer key for this node"},
     {"setOwnerDocument",     (PyCFunction)node_setOwnerDocument,      METH_VARARGS, "Set owner document (adopt node)"},
+    {"getCargo",             (PyCFunction)node_getCargo,              METH_NOARGS,  "Return user cargo attached to this node, or None"},
+    {"setCargo",             (PyCFunction)node_setCargo,              METH_VARARGS, "Attach a user Python object to this node (None to remove)"},
     {"getNamespaceURI",      (PyCFunction)node_getNamespaceURI,       METH_NOARGS,  "Return namespace URI of this node"},
     {"getName",              (PyCFunction)node_getName,               METH_NOARGS,  "Return qualified node name"},
     /* Aliases */

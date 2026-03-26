@@ -510,3 +510,59 @@ def test_addSibling_text_merge():
     ret = orig.addSibling(Text('Free'))
     # libxml2 merges adjacent text nodes
     assert ret is not None
+
+
+# ------------------------------------------------------------------ #
+# cargo                                                               #
+# ------------------------------------------------------------------ #
+
+def test_cargo_default_none():
+    doc = Parser().parse_string('<a/>')
+    root = doc.documentElement
+    assert root.getCargo() is None
+
+def test_cargo_set_get():
+    doc = Parser().parse_string('<a/>')
+    root = doc.documentElement
+    root.setCargo({'key': 'value'})
+    assert root.getCargo() == {'key': 'value'}
+
+def test_cargo_same_node_identity():
+    """Le cargo survit à plusieurs accès au même nœud."""
+    doc = Parser().parse_string('<a><b/></a>')
+    root = doc.documentElement
+    root.setCargo(42)
+    root2 = doc.documentElement
+    assert root.isSameNode(root2)
+    assert root2.getCargo() == 42
+
+def test_cargo_remove_with_none():
+    doc = Parser().parse_string('<a/>')
+    root = doc.documentElement
+    root.setCargo('hello')
+    root.setCargo(None)
+    assert root.getCargo() is None
+
+def test_cargo_refcount_on_doc_free():
+    """Le refcount de la cargaison est décrémenté quand le doc est libéré."""
+    import sys
+    doc = Parser().parse_string('<a/>')
+    root = doc.documentElement
+    obj = [1, 2, 3]
+    base = sys.getrefcount(obj)
+    root.setCargo(obj)
+    assert sys.getrefcount(obj) == base + 1
+    del root
+    del doc      # libère le document → doit décrementer le refcount du cargo
+    assert sys.getrefcount(obj) == base
+
+def test_cargo_independent_per_node():
+    doc = Parser().parse_string('<a><b/><c/></a>')
+    root = doc.documentElement
+    b = list(root.childNodes())[0]
+    c = list(root.childNodes())[1]
+    root.setCargo('root-cargo')
+    b.setCargo('b-cargo')
+    assert root.getCargo() == 'root-cargo'
+    assert b.getCargo() == 'b-cargo'
+    assert c.getCargo() is None

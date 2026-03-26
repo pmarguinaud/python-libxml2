@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include "libxml_document.h"
 #include "libxml_utils.h"
 #include "libxml_nodelist.h"
@@ -14,11 +15,26 @@ LibXML_Document_dealloc(LibXML_NodeObject *self)
 {
     PyObject_GC_UnTrack(self);
     if (self->node != NULL) {
-        /* Clear all _private pointers before freeing */
-        LibXML_clear_private_recursive(self->node);
-        self->node->_private = NULL;
-        xmlFreeDoc((xmlDocPtr)self->node);
+        xmlNodePtr doc_node = self->node;
+
+        /* Disconnect *this* wrapper from the document's priv struct without
+         * nulling self->node — we still need it valid for xmlFreeDoc below. */
+        LibXML_NodePrivate *priv = (LibXML_NodePrivate *)doc_node->_private;
+        if (priv && priv->wrapper == (PyObject *)self) {
+            priv->wrapper = NULL;
+            if (priv->cargo == NULL) {
+                free(priv);
+                doc_node->_private = NULL;
+            }
+        }
+
+        /* Clear priv structs for all child nodes and attributes.
+         * Their Python wrappers (if any) may outlive the document — null out
+         * their node pointer so they can't access freed memory. */
+        LibXML_clear_private_children(doc_node);
+
         self->node = NULL;
+        xmlFreeDoc((xmlDocPtr)doc_node);
     }
     /* doc_obj is always NULL for Document */
     Py_TYPE(self)->tp_free((PyObject *)self);
@@ -670,7 +686,11 @@ doc_cloneNode(LibXML_NodeObject *self, PyObject *args)
     result->node    = (xmlNodePtr)clone;
     result->owned   = 1;
     result->doc_obj = NULL;
-    clone->_private = (void *)result;
+    /* Store wrapper in LibXML_NodePrivate struct */
+    LibXML_NodePrivate *priv = (LibXML_NodePrivate *)calloc(1, sizeof(LibXML_NodePrivate));
+    if (!priv) { Py_DECREF(result); xmlFreeDoc(clone); return PyErr_NoMemory(); }
+    priv->wrapper   = (PyObject *)result;
+    clone->_private = priv;
     return (PyObject *)result;
 }
 

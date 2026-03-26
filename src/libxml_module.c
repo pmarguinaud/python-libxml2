@@ -24,6 +24,9 @@ PyInit__libxml(void)
     /* Install structured error handler */
     xmlSetStructuredErrorFunc(NULL, LibXML_error_handler);
 
+    /* Install node deregister callback to manage LibXML_NodePrivate lifetime */
+    xmlDeregisterNodeDefault(LibXML_node_deregister);
+
     /* Ready all types (dependency order: Node first, then subtypes) */
     if (PyType_Ready(&LibXML_NodeType) < 0) return NULL;
     if (PyType_Ready(&LibXML_DocumentFragmentType) < 0) return NULL;

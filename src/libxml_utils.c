@@ -30,23 +30,54 @@ LibXML_raise_last_error(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* Clear _private pointers before freeing a document tree             */
+/* Node deregister callback (called by libxml2 on xmlFreeNode)        */
+/* ------------------------------------------------------------------ */
+
+/* Release the LibXML_NodePrivate struct for one node.
+ * If a wrapper still exists (rare: direct xmlFreeNode call bypassing
+ * our tp_dealloc), null out its node pointer to prevent use-after-free. */
+static void
+release_priv(xmlNodePtr node)
+{
+    LibXML_NodePrivate *priv = (LibXML_NodePrivate *)node->_private;
+    if (!priv) return;
+    if (priv->wrapper) {
+        ((LibXML_NodeObject *)priv->wrapper)->node = NULL;
+        priv->wrapper = NULL;
+    }
+    if (priv->cargo) {
+        Py_DECREF(priv->cargo);
+        priv->cargo = NULL;
+    }
+    free(priv);
+    node->_private = NULL;
+}
+
+void
+LibXML_node_deregister(xmlNodePtr node)
+{
+    /* xmlNs nodes have a different struct layout — never touch their _private */
+    if (node->type == XML_NAMESPACE_DECL) return;
+    release_priv(node);
+}
+
+/* ------------------------------------------------------------------ */
+/* Clear _private structs before freeing a document tree              */
 /* ------------------------------------------------------------------ */
 
 static void
 clear_private_node(xmlNodePtr node)
 {
     if (node == NULL) return;
-    node->_private = NULL;
+    release_priv(node);
 
     /* Recurse into attributes */
     if (node->type == XML_ELEMENT_NODE) {
         xmlAttrPtr attr = node->properties;
         while (attr) {
-            ((xmlNodePtr)attr)->_private = NULL;
-            /* attr children (text nodes) */
+            release_priv((xmlNodePtr)attr);
             xmlNodePtr ac = ((xmlNodePtr)attr)->children;
-            while (ac) { ac->_private = NULL; ac = ac->next; }
+            while (ac) { release_priv(ac); ac = ac->next; }
             attr = attr->next;
         }
     }
@@ -64,6 +95,30 @@ LibXML_clear_private_recursive(xmlNodePtr node)
     clear_private_node(node);
 }
 
+/* Like LibXML_clear_private_recursive but skips the root node itself —
+ * used by Document dealloc which handles the root's priv separately. */
+void
+LibXML_clear_private_children(xmlNodePtr root)
+{
+    if (root == NULL) return;
+    /* Recurse into attributes of root */
+    if (root->type == XML_ELEMENT_NODE || root->type == XML_DOCUMENT_NODE
+        || root->type == XML_HTML_DOCUMENT_NODE) {
+        xmlAttrPtr attr = root->properties;
+        while (attr) {
+            release_priv((xmlNodePtr)attr);
+            xmlNodePtr ac = ((xmlNodePtr)attr)->children;
+            while (ac) { release_priv(ac); ac = ac->next; }
+            attr = attr->next;
+        }
+    }
+    xmlNodePtr child = root->children;
+    while (child) {
+        clear_private_node(child);
+        child = child->next;
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* Update doc_obj refs when a subtree moves to a new document          */
 /* ------------------------------------------------------------------ */
@@ -72,8 +127,9 @@ static void
 update_doc_refs_node(xmlNodePtr node, PyObject *new_doc_obj)
 {
     if (node == NULL) return;
-    if (node->_private != NULL) {
-        LibXML_NodeObject *wrapper = (LibXML_NodeObject *)node->_private;
+    LibXML_NodePrivate *priv = (LibXML_NodePrivate *)node->_private;
+    if (priv && priv->wrapper) {
+        LibXML_NodeObject *wrapper = (LibXML_NodeObject *)priv->wrapper;
         PyObject *old = wrapper->doc_obj;
         Py_XINCREF(new_doc_obj);
         wrapper->doc_obj = new_doc_obj;
@@ -123,11 +179,11 @@ LibXML_Node_Wrap(xmlNodePtr node, PyObject *doc_obj)
         return (PyObject *)self;
     }
 
-    /* Reuse existing wrapper */
-    if (node->_private != NULL) {
-        PyObject *existing = (PyObject *)node->_private;
-        Py_INCREF(existing);
-        return existing;
+    /* Reuse existing wrapper if one is live */
+    LibXML_NodePrivate *priv = (LibXML_NodePrivate *)node->_private;
+    if (priv && priv->wrapper != NULL) {
+        Py_INCREF(priv->wrapper);
+        return priv->wrapper;
     }
 
     /* Select Python type */
@@ -170,15 +226,19 @@ LibXML_Node_Wrap(xmlNodePtr node, PyObject *doc_obj)
     self->owned = 0;
 
     if (node->type == XML_DOCUMENT_NODE || node->type == XML_HTML_DOCUMENT_NODE) {
-        /* Document: doc_obj = NULL (self IS the document) */
         self->doc_obj = NULL;
     } else {
         Py_XINCREF(doc_obj);
         self->doc_obj = doc_obj;
     }
 
-    /* Cache in _private (borrowed ref — not ref-counted) */
-    node->_private = (void *)self;
+    /* Store wrapper in LibXML_NodePrivate (create struct lazily if needed) */
+    if (!priv) {
+        priv = (LibXML_NodePrivate *)calloc(1, sizeof(LibXML_NodePrivate));
+        if (!priv) { Py_DECREF(self); return PyErr_NoMemory(); }
+        node->_private = priv;
+    }
+    priv->wrapper = (PyObject *)self;  /* borrowed ref */
 
     return (PyObject *)self;
 }
