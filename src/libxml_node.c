@@ -5,6 +5,7 @@
 #include "libxml_nodelist.h"
 #include "libxml_xpath.h"
 #include <libxml/uri.h>
+#include <libxml/tree.h>
 
 /* ------------------------------------------------------------------ */
 /* tp_dealloc                                                          */
@@ -353,6 +354,19 @@ link_child_no_merge(xmlNodePtr parent, xmlNodePtr cur)
     return cur;
 }
 
+/* Helper: adopt a subtree into a new document.
+ * Uses xmlDOMWrapAdoptNode which handles both:
+ *   - String dictionary migration (node->name, content) from old dict to new dict
+ *   - Namespace pointer reconciliation (node->ns) in the new tree context
+ * dest_parent is the intended parent in the new tree (used for namespace lookup).
+ * dest_parent may be NULL (dict migration still happens, ns reconciliation skipped). */
+static void
+adopt_node_to_doc(xmlNodePtr node, xmlDocPtr old_doc, xmlDocPtr new_doc,
+                  xmlNodePtr dest_parent)
+{
+    xmlDOMWrapAdoptNode(NULL, old_doc, node, new_doc, dest_parent, 0);
+}
+
 /* Helper: adopt child into self's document if needed, then append */
 static xmlNodePtr
 do_append_child(LibXML_NodeObject *self, LibXML_NodeObject *child_wrap)
@@ -363,10 +377,19 @@ do_append_child(LibXML_NodeObject *self, LibXML_NodeObject *child_wrap)
     /* Unlink from current parent */
     xmlUnlinkNode(child);
 
-    /* Move to our document if different */
+    /* Move to our document if different.
+     * Hold a reference to the old doc_obj to prevent premature deallocation:
+     * LibXML_update_doc_refs calls Py_XDECREF on the old doc_obj which could
+     * trigger xmlFreeDoc while child still holds pointers into the old document.
+     * xmlDOMWrapAdoptNode handles both string dict migration and namespace
+     * reconciliation — it is the proper API for cross-document node adoption. */
     if (child->doc != our_doc) {
-        xmlSetTreeDoc(child, our_doc);
+        xmlDocPtr old_xmldoc = child->doc;
+        PyObject *old_doc = child_wrap->doc_obj;
+        Py_XINCREF(old_doc);
+        adopt_node_to_doc(child, old_xmldoc, our_doc, self->node);
         LibXML_update_doc_refs(child, node_doc_obj(self));
+        Py_XDECREF(old_doc);
     }
 
     /* Use xmlAddChild for attribute nodes; manual link for others to
@@ -393,12 +416,16 @@ node_appendChild(LibXML_NodeObject *self, PyObject *args)
     /* DocumentFragment: inline its children one by one */
     if (child->node->type == XML_DOCUMENT_FRAG_NODE) {
         xmlDocPtr our_doc = LibXML_DOC_FROM_NODE(self);
+        /* Hold ref to fragment's old doc to prevent premature deallocation */
+        PyObject *frag_old_doc = child->doc_obj;
+        Py_XINCREF(frag_old_doc);
         xmlNodePtr fc = child->node->children;
         while (fc) {
             xmlNodePtr next = fc->next;
+            xmlDocPtr fc_old_doc = fc->doc;
             xmlUnlinkNode(fc);
             if (fc->doc != our_doc) {
-                xmlSetTreeDoc(fc, our_doc);
+                adopt_node_to_doc(fc, fc_old_doc, our_doc, self->node);
                 LibXML_update_doc_refs(fc, node_doc_obj(self));
             }
             if (fc->type == XML_ATTRIBUTE_NODE) {
@@ -411,6 +438,7 @@ node_appendChild(LibXML_NodeObject *self, PyObject *args)
             }
             fc = next;
         }
+        Py_XDECREF(frag_old_doc);
         Py_INCREF(child);
         return (PyObject *)child;
     }
@@ -435,8 +463,12 @@ node_insertBefore(LibXML_NodeObject *self, PyObject *args)
 
     xmlUnlinkNode(newn);
     if (newn->doc != our_doc) {
-        xmlSetTreeDoc(newn, our_doc);
+        xmlDocPtr old_xmldoc = newn->doc;
+        PyObject *old_doc = new_node->doc_obj;
+        Py_XINCREF(old_doc);
+        adopt_node_to_doc(newn, old_xmldoc, our_doc, self->node);
         LibXML_update_doc_refs(newn, node_doc_obj(self));
+        Py_XDECREF(old_doc);
     }
 
     xmlNodePtr result = xmlAddPrevSibling(ref_node->node, newn);
@@ -462,8 +494,12 @@ node_insertAfter(LibXML_NodeObject *self, PyObject *args)
 
     xmlUnlinkNode(newn);
     if (newn->doc != our_doc) {
-        xmlSetTreeDoc(newn, our_doc);
+        xmlDocPtr old_xmldoc = newn->doc;
+        PyObject *old_doc = new_node->doc_obj;
+        Py_XINCREF(old_doc);
+        adopt_node_to_doc(newn, old_xmldoc, our_doc, self->node);
         LibXML_update_doc_refs(newn, node_doc_obj(self));
+        Py_XDECREF(old_doc);
     }
 
     xmlNodePtr result;
@@ -524,8 +560,12 @@ node_replaceChild(LibXML_NodeObject *self, PyObject *args)
 
     xmlUnlinkNode(newn);
     if (newn->doc != our_doc) {
-        xmlSetTreeDoc(newn, our_doc);
+        xmlDocPtr old_xmldoc = newn->doc;
+        PyObject *old_doc = new_node->doc_obj;
+        Py_XINCREF(old_doc);
+        adopt_node_to_doc(newn, old_xmldoc, our_doc, self->node);
         LibXML_update_doc_refs(newn, node_doc_obj(self));
+        Py_XDECREF(old_doc);
     }
 
     xmlNodePtr replaced = xmlReplaceNode(old_node->node, newn);
@@ -552,8 +592,13 @@ node_replaceNode(LibXML_NodeObject *self, PyObject *args)
 
     xmlUnlinkNode(newn);
     if (our_doc && newn->doc != our_doc) {
-        xmlSetTreeDoc(newn, our_doc);
+        xmlDocPtr old_xmldoc = newn->doc;
+        PyObject *old_doc = new_node->doc_obj;
+        Py_XINCREF(old_doc);
+        /* dest_parent: use self->node's parent for namespace lookup */
+        adopt_node_to_doc(newn, old_xmldoc, our_doc, self->node->parent);
         LibXML_update_doc_refs(newn, node_doc_obj(self));
+        Py_XDECREF(old_doc);
     }
 
     xmlNodePtr replaced = xmlReplaceNode(self->node, newn);

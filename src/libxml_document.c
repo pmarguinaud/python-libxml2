@@ -32,7 +32,6 @@ LibXML_Document_dealloc(LibXML_NodeObject *self)
          * Their Python wrappers (if any) may outlive the document — null out
          * their node pointer so they can't access freed memory. */
         LibXML_clear_private_children(doc_node);
-
         self->node = NULL;
         xmlFreeDoc((xmlDocPtr)doc_node);
     }
