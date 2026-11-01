@@ -274,12 +274,9 @@ parser_load_html(LibXML_ParserObject *self, PyObject *args, PyObject *kwds)
 /* parse_balanced_chunk                                                */
 /* ------------------------------------------------------------------ */
 
-static PyObject *
-parser_parse_balanced_chunk(LibXML_ParserObject *self, PyObject *args)
+PyObject *
+LibXML_parse_chunk(const char *chunk)
 {
-    const char *chunk;
-    if (!PyArg_ParseTuple(args, "s", &chunk)) return NULL;
-
     /* Create a temporary document to hold the fragment */
     xmlDocPtr doc = xmlNewDoc(BAD_CAST "1.0");
     if (!doc) return PyErr_NoMemory();
@@ -314,6 +311,14 @@ parser_parse_balanced_chunk(LibXML_ParserObject *self, PyObject *args)
     if (!frag_wrap) xmlFreeNode(frag);
     Py_DECREF(doc_wrap);
     return frag_wrap;
+}
+
+static PyObject *
+parser_parse_balanced_chunk(LibXML_ParserObject *self, PyObject *args)
+{
+    const char *chunk;
+    if (!PyArg_ParseTuple(args, "s", &chunk)) return NULL;
+    return LibXML_parse_chunk(chunk);
 }
 
 /* ------------------------------------------------------------------ */

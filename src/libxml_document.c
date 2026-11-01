@@ -19,6 +19,10 @@ LibXML_Document_dealloc(LibXML_NodeObject *self)
         xmlDocPtr doc = (xmlDocPtr)self->node;
         self->node = NULL;
 
+        LibXML_NodePrivate *priv = (LibXML_NodePrivate *)doc->_private;
+        if (priv)
+            LibXML_free_old_dtds(&priv->old_dtds);
+
         /* Every wrapper of this document held a reference to it, so only the
          * private structs of nodes with cargo can remain. */
         LibXML_clear_private((xmlNodePtr)doc);
@@ -175,6 +179,7 @@ doc_createElement(LibXML_NodeObject *self, PyObject *args)
 {
     const char *name;
     if (!PyArg_ParseTuple(args, "s", &name)) return NULL;
+    if (LibXML_check_name(name) < 0) return NULL;
     xmlNodePtr node = xmlNewDocNode(LibXML_DOC(self), NULL, BAD_CAST name, NULL);
     if (node == NULL) {
         LibXML_raise_last_error();
@@ -188,32 +193,27 @@ static PyObject *
 doc_createElementNS(LibXML_NodeObject *self, PyObject *args)
 {
     const char *ns_uri, *qname;
-    if (!PyArg_ParseTuple(args, "ss", &ns_uri, &qname)) return NULL;
+    if (!PyArg_ParseTuple(args, "zs", &ns_uri, &qname)) return NULL;
+    if (LibXML_check_name(qname) < 0) return NULL;
 
-    /* Split qname into prefix:localname */
-    const char *colon = strchr(qname, ':');
-    xmlChar *prefix = NULL, *localname;
-    if (colon) {
-        prefix    = xmlStrndup(BAD_CAST qname, (int)(colon - qname));
-        localname = xmlStrdup(BAD_CAST (colon + 1));
+    xmlNodePtr node;
+    if (ns_uri == NULL || ns_uri[0] == '\0') {
+        node = xmlNewDocNode(LibXML_DOC(self), NULL, BAD_CAST qname, NULL);
     } else {
-        localname = xmlStrdup(BAD_CAST qname);
-    }
-
-    xmlNodePtr node = xmlNewDocNode(LibXML_DOC(self), NULL, localname, NULL);
-    xmlFree(localname);
-    if (node == NULL) {
+        xmlChar *prefix = NULL;
+        xmlChar *local = xmlSplitQName2(BAD_CAST qname, &prefix);
+        node = xmlNewDocNode(LibXML_DOC(self), NULL,
+                             local ? local : BAD_CAST qname, NULL);
+        if (node != NULL)
+            xmlSetNs(node, xmlNewNs(node, BAD_CAST ns_uri, prefix));
+        xmlFree(local);
         xmlFree(prefix);
+    }
+    if (node == NULL) {
         LibXML_raise_last_error();
         return NULL;
     }
-
-    xmlNsPtr ns = xmlNewNs(node, BAD_CAST ns_uri, prefix);
-    xmlFree(prefix);
-    xmlSetNs(node, ns);
-
-    PyObject *result = LibXML_Node_Wrap(node);
-    return result;
+    return LibXML_Node_Wrap(node);
 }
 
 static PyObject *
@@ -255,6 +255,7 @@ doc_createPI(LibXML_NodeObject *self, PyObject *args)
 {
     const char *target, *data = NULL;
     if (!PyArg_ParseTuple(args, "s|s", &target, &data)) return NULL;
+    if (LibXML_check_name(target) < 0) return NULL;
     xmlNodePtr node = xmlNewDocPI(LibXML_DOC(self), BAD_CAST target,
                                    data ? BAD_CAST data : NULL);
     if (node == NULL) { LibXML_raise_last_error(); return NULL; }
@@ -277,6 +278,7 @@ doc_createAttribute(LibXML_NodeObject *self, PyObject *args)
     const char *name;
     const char *value = NULL;
     if (!PyArg_ParseTuple(args, "s|z", &name, &value)) return NULL;
+    if (LibXML_check_name(name) < 0) return NULL;
     xmlDocPtr doc = LibXML_DOC(self);
     /* Create with NULL value to avoid entity-parsing the content */
     xmlAttrPtr attr = xmlNewDocProp(doc, BAD_CAST name, NULL);
@@ -298,23 +300,54 @@ doc_createAttributeNS(LibXML_NodeObject *self, PyObject *args)
 {
     const char *ns_uri, *qname;
     const char *value = "";
-    if (!PyArg_ParseTuple(args, "ss|s", &ns_uri, &qname, &value)) return NULL;
+    if (!PyArg_ParseTuple(args, "zs|s", &ns_uri, &qname, &value)) return NULL;
+    if (LibXML_check_name(qname) < 0) return NULL;
 
-    /* We create the attribute standalone; ns is set when attached to an element */
-    const char *colon = strchr(qname, ':');
-    const char *localname = colon ? colon + 1 : qname;
+    xmlDocPtr doc = LibXML_DOC(self);
+    xmlNsPtr ns = NULL;
+    xmlChar *prefix = NULL;
+    xmlChar *local = NULL;
 
-    xmlAttrPtr attr = xmlNewDocProp(LibXML_DOC(self), BAD_CAST localname, BAD_CAST value);
+    if (ns_uri && ns_uri[0]) {
+        local = xmlSplitQName2(BAD_CAST qname, &prefix);
+
+        /* As in Perl, the root element declares it. Without a root, Perl
+         * refuses, and here the document keeps it until the attribute is used. */
+        xmlNodePtr root = xmlDocGetRootElement(doc);
+        if (root != NULL) {
+            ns = xmlSearchNsByHref(doc, root, BAD_CAST ns_uri);
+            if (ns == NULL)
+                ns = xmlNewNs(root, BAD_CAST ns_uri, prefix);
+        } else {
+            ns = LibXML_doc_ns(doc, BAD_CAST ns_uri, prefix);
+        }
+        if (ns == NULL) {
+            xmlFree(local);
+            xmlFree(prefix);
+            PyErr_SetString(LibXML_Error, "cannot declare the namespace of this attribute");
+            return NULL;
+        }
+    }
+
+    xmlAttrPtr attr = xmlNewDocProp(doc, local ? local : BAD_CAST qname, NULL);
+    xmlFree(local);
+    xmlFree(prefix);
     if (attr == NULL) { LibXML_raise_last_error(); return NULL; }
 
-    /* Store the namespace URI in the attr's ns */
-    xmlChar *prefix = colon ?
-        xmlStrndup(BAD_CAST qname, (int)(colon - qname)) : NULL;
-    attr->ns = LibXML_doc_ns(attr->doc, BAD_CAST ns_uri, prefix);
-    xmlFree(prefix);
+    attr->ns = ns;
+    LibXML_set_text((xmlNodePtr)attr, value);
+    return LibXML_Node_Wrap((xmlNodePtr)attr);
+}
 
-    PyObject *result = LibXML_Node_Wrap((xmlNodePtr)attr);
-    return result;
+static PyObject *
+doc_createEntityReference(LibXML_NodeObject *self, PyObject *args)
+{
+    const char *name;
+    if (!PyArg_ParseTuple(args, "s", &name)) return NULL;
+    if (LibXML_check_name(name) < 0) return NULL;
+    xmlNodePtr node = xmlNewReference(LibXML_DOC(self), BAD_CAST name);
+    if (node == NULL) { LibXML_raise_last_error(); return NULL; }
+    return LibXML_Node_Wrap(node);
 }
 
 /* ------------------------------------------------------------------ */
@@ -392,95 +425,20 @@ doc_toFile(LibXML_NodeObject *self, PyObject *args, PyObject *kwds)
 /* getElementsByTagName / getElementsByTagNameNS / getElementById      */
 /* ------------------------------------------------------------------ */
 
-/* Helper: run XPath from the document root */
-static PyObject *
-doc_xpath_query(LibXML_NodeObject *self, const char *xpath_expr)
-{
-    xmlDocPtr doc = LibXML_DOC(self);
-    xmlXPathContextPtr ctx = xmlXPathNewContext(doc);
-    if (!ctx) return PyErr_NoMemory();
-    ctx->node = (xmlNodePtr)doc;   /* set context to document node */
-
-    xmlXPathObjectPtr xobj = xmlXPathEvalExpression(BAD_CAST xpath_expr, ctx);
-    xmlXPathFreeContext(ctx);
-    if (!xobj) { LibXML_raise_last_error(); return NULL; }
-
-    PyObject *result = LibXML_NodeList_FromNodeSet(xobj->nodesetval);
-    xmlXPathFreeObject(xobj);
-    return result;
-}
-
 static PyObject *
 doc_getElementsByTagName(LibXML_NodeObject *self, PyObject *args)
 {
     const char *name;
     if (!PyArg_ParseTuple(args, "s", &name)) return NULL;
-
-    char xpath[512];
-    if (strcmp(name, "*") == 0)
-        snprintf(xpath, sizeof(xpath), "descendant::*");
-    else
-        snprintf(xpath, sizeof(xpath), "descendant::%s", name);
-
-    return doc_xpath_query(self, xpath);
+    return LibXML_find_elements(self->node, 0, name, NULL);
 }
 
 static PyObject *
 doc_getElementsByTagNameNS(LibXML_NodeObject *self, PyObject *args)
 {
     const char *ns_uri, *localname;
-    if (!PyArg_ParseTuple(args, "ss", &ns_uri, &localname)) return NULL;
-
-    xmlDocPtr doc = LibXML_DOC(self);
-    xmlXPathContextPtr ctx = xmlXPathNewContext(doc);
-    if (!ctx) return PyErr_NoMemory();
-    ctx->node = (xmlNodePtr)doc;
-
-    /* wildcard ns: use local-name() approach */
-    char xpath[1024];
-    if (strcmp(ns_uri, "*") == 0 && strcmp(localname, "*") == 0) {
-        snprintf(xpath, sizeof(xpath), "descendant::*");
-        xmlXPathObjectPtr xobj = xmlXPathEvalExpression(BAD_CAST xpath, ctx);
-        xmlXPathFreeContext(ctx);
-        if (!xobj) { LibXML_raise_last_error(); return NULL; }
-        PyObject *result = LibXML_NodeList_FromNodeSet(xobj->nodesetval);
-        xmlXPathFreeObject(xobj);
-        return result;
-    }
-    if (strcmp(ns_uri, "*") == 0) {
-        /* any namespace, specific local name */
-        if (strcmp(localname, "*") == 0)
-            snprintf(xpath, sizeof(xpath),
-                "descendant::*[namespace-uri()!='']");
-        else
-            snprintf(xpath, sizeof(xpath),
-                "descendant::*[local-name()='%s']", localname);
-        xmlXPathObjectPtr xobj = xmlXPathEvalExpression(BAD_CAST xpath, ctx);
-        xmlXPathFreeContext(ctx);
-        if (!xobj) { LibXML_raise_last_error(); return NULL; }
-        PyObject *result = LibXML_NodeList_FromNodeSet(xobj->nodesetval);
-        xmlXPathFreeObject(xobj);
-        return result;
-    }
-
-    if (xmlXPathRegisterNs(ctx, BAD_CAST "ns_", BAD_CAST ns_uri) != 0) {
-        xmlXPathFreeContext(ctx);
-        PyErr_SetString(PyExc_RuntimeError, "failed to register namespace");
-        return NULL;
-    }
-
-    if (strcmp(localname, "*") == 0)
-        snprintf(xpath, sizeof(xpath), "descendant::ns_:*");
-    else
-        snprintf(xpath, sizeof(xpath), "descendant::ns_:%s", localname);
-
-    xmlXPathObjectPtr xobj = xmlXPathEvalExpression(BAD_CAST xpath, ctx);
-    xmlXPathFreeContext(ctx);
-    if (!xobj) { LibXML_raise_last_error(); return NULL; }
-
-    PyObject *result = LibXML_NodeList_FromNodeSet(xobj->nodesetval);
-    xmlXPathFreeObject(xobj);
-    return result;
+    if (!PyArg_ParseTuple(args, "zs", &ns_uri, &localname)) return NULL;
+    return LibXML_find_elements(self->node, 2, localname, ns_uri ? ns_uri : "");
 }
 
 static PyObject *
@@ -488,15 +446,7 @@ doc_getElementsByLocalName(LibXML_NodeObject *self, PyObject *args)
 {
     const char *localname;
     if (!PyArg_ParseTuple(args, "s", &localname)) return NULL;
-
-    char xpath[512];
-    if (strcmp(localname, "*") == 0)
-        snprintf(xpath, sizeof(xpath), "descendant::*");
-    else
-        snprintf(xpath, sizeof(xpath),
-            "descendant::*[local-name()='%s']", localname);
-
-    return doc_xpath_query(self, xpath);
+    return LibXML_find_elements(self->node, 1, localname, NULL);
 }
 
 static PyObject *
@@ -670,6 +620,7 @@ static PyMethodDef LibXML_Document_methods[] = {
     {"createDocumentFragment",(PyCFunction)doc_createDocumentFragment,METH_NOARGS,  "Create document fragment"},
     {"createAttribute",       (PyCFunction)doc_createAttribute,       METH_VARARGS, "Create attribute"},
     {"createAttributeNS",     (PyCFunction)doc_createAttributeNS,     METH_VARARGS, "Create namespaced attribute"},
+    {"createEntityReference", (PyCFunction)doc_createEntityReference, METH_VARARGS, "Create entity reference"},
     {"cloneNode",             (PyCFunction)doc_cloneNode,             METH_VARARGS, "Clone document (deep=False for shallow)"},
     {"toString",              (PyCFunction)doc_toString,              METH_VARARGS|METH_KEYWORDS, "Serialize to string"},
     {"serialize",             (PyCFunction)doc_toString,              METH_VARARGS|METH_KEYWORDS, "Serialize to string (alias)"},

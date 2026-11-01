@@ -259,7 +259,6 @@ def test_setNamespaceDeclURI_remove():
 # 10.  xml namespace                                                  #
 # ------------------------------------------------------------------ #
 
-@pytest.mark.skip(reason="cross-document replaceChild without importNode causes segfault")
 def test_xml_namespace_replaceChild():
     doc_one = Parser().parse_string('<foo><inc xml:id="test"/></foo>')
     doc_two = Parser().parse_string('<bar><urgh xml:id="foo"/></bar>')

@@ -112,7 +112,6 @@ def test_createElementNS():
     assert node.namespaceURI == "http://kungfoo"
 
 
-@pytest.mark.xfail(reason="libxml2 may not validate all element names")
 def test_createElement_bad_names():
     doc = Document()
     for name in (";", "&", "<><", "/", "1A"):
@@ -160,7 +159,6 @@ def test_createAttribute():
     assert attr.hasChildNodes() == False
 
 
-@pytest.mark.xfail(reason="libxml2 may not validate all attribute names")
 def test_createAttribute_bad_names():
     doc = Document()
     for name in (";", "&", "<><", "/", "1A"):

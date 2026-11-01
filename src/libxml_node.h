@@ -27,6 +27,12 @@ extern PyTypeObject LibXML_DocumentFragmentType;
 /* Type check macros */
 #define LibXML_Node_Check(op)  PyObject_TypeCheck((op), &LibXML_NodeType)
 
+/* Rename a node, keeping its namespace. Returns 0, or -1 with an exception set. */
+int LibXML_set_node_name(xmlNodePtr node, const char *name);
+
+/* Compare the name of a node with name, as nodeName gives it. */
+int LibXML_node_name_is(xmlNodePtr node, const char *name);
+
 /* GC helper (shared with subtypes) */
 int LibXML_Node_traverse(LibXML_NodeObject *self, visitproc visit, void *arg);
 

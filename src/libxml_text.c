@@ -38,19 +38,32 @@ chardata_setData(LibXML_NodeObject *self, PyObject *args)
     Py_RETURN_NONE;
 }
 
+/* Offsets count characters, and content is UTF-8. Bytes taken by `chars`
+ * characters at the start of s, up to the end of s. */
+static int
+char_bytes(const xmlChar *s, int chars)
+{
+    int i = 0;
+    while (chars > 0 && s[i]) {
+        i++;
+        while ((s[i] & 0xC0) == 0x80) i++;
+        chars--;
+    }
+    return i;
+}
+
 static PyObject *
 chardata_substringData(LibXML_NodeObject *self, PyObject *args)
 {
     int offset, length;
     if (!PyArg_ParseTuple(args, "ii", &offset, &length)) return NULL;
+    if (offset < 0 || length < 0) Py_RETURN_NONE;
+
     xmlChar *content = xmlNodeGetContent(self->node);
     if (!content) return PyUnicode_FromString("");
-    int total = (int)xmlStrlen(content);
-    if (offset < 0) offset = 0;
-    if (offset > total) offset = total;
-    if (offset + length > total) length = total - offset;
-    if (length < 0) length = 0;
-    PyObject *ret = PyUnicode_FromStringAndSize((const char *)content + offset, length);
+    int start = char_bytes(content, offset);
+    int size  = char_bytes(content + start, length);
+    PyObject *ret = PyUnicode_FromStringAndSize((const char *)content + start, size);
     xmlFree(content);
     return ret;
 }
@@ -64,24 +77,19 @@ chardata_appendData(LibXML_NodeObject *self, PyObject *args)
     Py_RETURN_NONE;
 }
 
+/* Replace `drop` bytes of the content at byte `start`. Takes old. */
 static PyObject *
-chardata_insertData(LibXML_NodeObject *self, PyObject *args)
+splice_content(LibXML_NodeObject *self, xmlChar *old, int start, int drop,
+               const char *data)
 {
-    int offset;
-    const char *data;
-    if (!PyArg_ParseTuple(args, "is", &offset, &data)) return NULL;
+    int total = xmlStrlen(old);
+    int dlen  = (int)strlen(data);
 
-    xmlChar *old = xmlNodeGetContent(self->node);
-    if (!old) old = xmlStrdup(BAD_CAST "");
-    int total = (int)xmlStrlen(old);
-    if (offset < 0) offset = 0;
-    if (offset > total) offset = total;
-
-    xmlChar *newval = xmlMalloc(total + strlen(data) + 1);
+    xmlChar *newval = xmlMalloc(total - drop + dlen + 1);
     if (!newval) { xmlFree(old); return PyErr_NoMemory(); }
-    memcpy(newval, old, offset);
-    strcpy((char *)newval + offset, data);
-    memcpy(newval + offset + strlen(data), old + offset, total - offset + 1);
+    memcpy(newval, old, start);
+    memcpy(newval + start, data, dlen);
+    memcpy(newval + start + dlen, old + start + drop, total - start - drop + 1);
     xmlNodeSetContent(self->node, newval);
     xmlFree(old);
     xmlFree(newval);
@@ -89,26 +97,29 @@ chardata_insertData(LibXML_NodeObject *self, PyObject *args)
 }
 
 static PyObject *
+chardata_insertData(LibXML_NodeObject *self, PyObject *args)
+{
+    int offset;
+    const char *data;
+    if (!PyArg_ParseTuple(args, "is", &offset, &data)) return NULL;
+    if (offset < 0 || data[0] == '\0') Py_RETURN_NONE;
+
+    xmlChar *old = xmlNodeGetContent(self->node);
+    if (!old) old = xmlStrdup(BAD_CAST "");
+    return splice_content(self, old, char_bytes(old, offset), 0, data);
+}
+
+static PyObject *
 chardata_deleteData(LibXML_NodeObject *self, PyObject *args)
 {
     int offset, length;
     if (!PyArg_ParseTuple(args, "ii", &offset, &length)) return NULL;
+    if (offset < 0 || length <= 0) Py_RETURN_NONE;
 
     xmlChar *old = xmlNodeGetContent(self->node);
     if (!old) Py_RETURN_NONE;
-    int total = (int)xmlStrlen(old);
-    if (offset < 0) offset = 0;
-    if (offset > total) { xmlFree(old); Py_RETURN_NONE; }
-    if (offset + length > total) length = total - offset;
-
-    xmlChar *newval = xmlMalloc(total - length + 1);
-    if (!newval) { xmlFree(old); return PyErr_NoMemory(); }
-    memcpy(newval, old, offset);
-    memcpy(newval + offset, old + offset + length, total - offset - length + 1);
-    xmlNodeSetContent(self->node, newval);
-    xmlFree(old);
-    xmlFree(newval);
-    Py_RETURN_NONE;
+    int start = char_bytes(old, offset);
+    return splice_content(self, old, start, char_bytes(old + start, length), "");
 }
 
 /* Replace `from` with `to` in one pass over src, like Perl's s///: text that
@@ -178,25 +189,17 @@ chardata_replaceData(LibXML_NodeObject *self, PyObject *args)
     int offset, length;
     const char *data;
     if (!PyArg_ParseTuple(args, "iis", &offset, &length, &data)) return NULL;
+    if (offset < 0 || length < 0 || data[0] == '\0') Py_RETURN_NONE;
 
     xmlChar *old = xmlNodeGetContent(self->node);
-    if (!old) old = xmlStrdup(BAD_CAST "");
-    int total = (int)xmlStrlen(old);
-    if (offset < 0) offset = 0;
-    if (offset > total) offset = total;
-    if (offset + length > total) length = total - offset;
+    if (!old) Py_RETURN_NONE;
 
-    int dlen   = (int)strlen(data);
-    int newlen = total - length + dlen;
-    xmlChar *newval = xmlMalloc(newlen + 1);
-    if (!newval) { xmlFree(old); return PyErr_NoMemory(); }
-    memcpy(newval, old, offset);
-    memcpy(newval + offset, data, dlen);
-    memcpy(newval + offset + dlen, old + offset + length, total - offset - length + 1);
-    xmlNodeSetContent(self->node, newval);
-    xmlFree(old);
-    xmlFree(newval);
-    Py_RETURN_NONE;
+    int start = char_bytes(old, offset);
+    if (old[start] == '\0') {   /* nothing at this offset, as in Perl */
+        xmlFree(old);
+        Py_RETURN_NONE;
+    }
+    return splice_content(self, old, start, char_bytes(old + start, length), data);
 }
 
 static PyObject *

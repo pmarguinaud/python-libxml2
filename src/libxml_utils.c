@@ -31,6 +31,16 @@ LibXML_raise_last_error(void)
     }
 }
 
+int
+LibXML_check_name(const char *name)
+{
+    if (name == NULL || name[0] == '\0' || xmlValidateName(BAD_CAST name, 0) != 0) {
+        PyErr_Format(LibXML_Error, "bad name: '%s'", name ? name : "");
+        return -1;
+    }
+    return 0;
+}
+
 /* ------------------------------------------------------------------ */
 /* Node wrapping factory                                               */
 /* ------------------------------------------------------------------ */

@@ -40,15 +40,8 @@ static PyObject *
 attr_get_value(LibXML_NodeObject *self, void *closure)
 {
     xmlAttrPtr attr = (xmlAttrPtr)self->node;
-    /* Attribute value is in the children text node */
-    if (attr->children && attr->children->content)
-        return PyUnicode_FromString((const char *)attr->children->content);
-    /* xmlGetProp gives the full expanded value */
-    xmlChar *val = NULL;
-    if (attr->parent)
-        val = xmlGetProp(attr->parent, attr->name);
-    else if (attr->children)
-        val = xmlNodeListGetString(attr->doc, attr->children, 1);
+    /* Children can mix text and entity references. */
+    xmlChar *val = xmlNodeListGetString(attr->doc, attr->children, 1);
     if (!val) return PyUnicode_FromString("");
     PyObject *ret = PyUnicode_FromString((const char *)val);
     xmlFree(val);
@@ -119,20 +112,20 @@ attr_setNamespace(LibXML_NodeObject *self, PyObject *args)
     xmlAttrPtr attr = (xmlAttrPtr)self->node;
 
     if (!ns_uri || ns_uri[0] == '\0') {
-        /* Remove namespace from attr */
         attr->ns = NULL;
-        Py_RETURN_TRUE;
+        return PyBool_FromLong(attr->parent != NULL);
     }
 
-    /* Create/find a namespace on the owning element */
-    xmlNsPtr ns;
-    if (attr->parent) {
+    /* As in Perl, the namespace must be declared already on the element. */
+    if (attr->parent == NULL) Py_RETURN_FALSE;
+
+    xmlNsPtr ns = xmlSearchNs(attr->doc, attr->parent, BAD_CAST prefix);
+    if (ns == NULL || !xmlStrEqual(ns->href, BAD_CAST ns_uri))
         ns = xmlSearchNsByHref(attr->doc, attr->parent, BAD_CAST ns_uri);
-        if (!ns) ns = xmlNewNs(attr->parent, BAD_CAST ns_uri,
-                               prefix ? BAD_CAST prefix : NULL);
-    } else {
-        ns = LibXML_doc_ns(attr->doc, BAD_CAST ns_uri, BAD_CAST prefix);
-    }
+
+    /* An attribute without a prefix has no namespace. */
+    if (ns == NULL || ns->prefix == NULL) Py_RETURN_FALSE;
+
     attr->ns = ns;
     Py_RETURN_TRUE;
 }

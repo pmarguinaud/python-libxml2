@@ -31,10 +31,8 @@ LibXML_Node_dealloc(LibXML_NodeObject *self)
         }
 
         /* A root is the last wrapper of its tree: see libxml_tree.h */
-        if (self->owner == NULL) {
-            LibXML_clear_private(node);
-            xmlFreeNode(node);
-        }
+        if (self->owner == NULL)
+            LibXML_free_tree(node);
     }
     Py_XDECREF(self->owner);
     Py_XDECREF(self->doc_obj);
@@ -73,63 +71,106 @@ LibXML_Node_repr(LibXML_NodeObject *self)
 /* Properties (getset)                                                 */
 /* ------------------------------------------------------------------ */
 
+/* Node types with a fixed DOM name, or NULL */
+static const char *
+fixed_node_name(xmlNodePtr node)
+{
+    switch (node->type) {
+    case XML_DOCUMENT_NODE:
+    case XML_HTML_DOCUMENT_NODE: return "#document";
+    case XML_TEXT_NODE:          return "#text";
+    case XML_COMMENT_NODE:       return "#comment";
+    case XML_CDATA_SECTION_NODE: return "#cdata-section";
+    case XML_DOCUMENT_FRAG_NODE: return "#document-fragment";
+    default:                     return NULL;
+    }
+}
+
+/* Only these node types have a namespace. */
+static xmlNsPtr
+node_ns(xmlNodePtr node)
+{
+    if (node->type == XML_ELEMENT_NODE || node->type == XML_ATTRIBUTE_NODE)
+        return node->ns;
+    return NULL;
+}
+
 static PyObject *
 node_get_nodeName(LibXML_NodeObject *self, void *closure)
 {
-    const xmlChar *name = NULL;
-    switch (self->node->type) {
-        case XML_DOCUMENT_NODE:
-        case XML_HTML_DOCUMENT_NODE:
-            name = (const xmlChar *)"#document";
-            break;
-        case XML_TEXT_NODE:
-            name = (const xmlChar *)"#text";
-            break;
-        case XML_COMMENT_NODE:
-            name = (const xmlChar *)"#comment";
-            break;
-        case XML_CDATA_SECTION_NODE:
-            name = (const xmlChar *)"#cdata-section";
-            break;
-        case XML_DOCUMENT_FRAG_NODE:
-            name = (const xmlChar *)"#document-fragment";
-            break;
-        default:
-            name = self->node->name;
-            break;
-    }
+    const char *fixed = fixed_node_name(self->node);
+    if (fixed) return PyUnicode_FromString(fixed);
+
+    const xmlChar *name = self->node->name;
     if (name == NULL) Py_RETURN_NONE;
 
-    /* Include namespace prefix for elements/attributes */
-    if ((self->node->type == XML_ELEMENT_NODE || self->node->type == XML_ATTRIBUTE_NODE)
-        && self->node->ns && self->node->ns->prefix) {
-        return PyUnicode_FromFormat("%s:%s",
-            (const char *)self->node->ns->prefix,
-            (const char *)name);
-    }
+    xmlNsPtr ns = node_ns(self->node);
+    if (ns && ns->prefix)
+        return PyUnicode_FromFormat("%s:%s", (const char *)ns->prefix,
+                                    (const char *)name);
     return PyUnicode_FromString((const char *)name);
+}
+
+int
+LibXML_node_name_is(xmlNodePtr node, const char *name)
+{
+    const char *fixed = fixed_node_name(node);
+    if (fixed) return strcmp(fixed, name) == 0;
+    if (node->name == NULL) return 0;
+
+    xmlNsPtr ns = node_ns(node);
+    if (ns && ns->prefix) {
+        size_t len = strlen((const char *)ns->prefix);
+        return strncmp(name, (const char *)ns->prefix, len) == 0
+            && name[len] == ':'
+            && strcmp(name + len + 1, (const char *)node->name) == 0;
+    }
+    return strcmp(name, (const char *)node->name) == 0;
+}
+
+int
+LibXML_set_node_name(xmlNodePtr node, const char *name)
+{
+    if (LibXML_check_name(name) < 0) return -1;
+
+    xmlChar *prefix = NULL, *local = NULL;
+    if (node_ns(node) != NULL)
+        local = xmlSplitQName2(BAD_CAST name, &prefix);
+    xmlNodeSetName(node, local ? local : BAD_CAST name);
+    xmlFree(local);
+    xmlFree(prefix);
+    return 0;
 }
 
 static PyObject *
 node_get_localname(LibXML_NodeObject *self, void *closure)
 {
-    if (self->node->name == NULL) Py_RETURN_NONE;
-    return PyUnicode_FromString((const char *)self->node->name);
+    switch (self->node->type) {
+    case XML_ELEMENT_NODE:
+    case XML_ATTRIBUTE_NODE:
+    case XML_ELEMENT_DECL:
+    case XML_ATTRIBUTE_DECL:
+        return PyUnicode_FromString((const char *)self->node->name);
+    default:
+        Py_RETURN_NONE;
+    }
 }
 
 static PyObject *
 node_get_prefix(LibXML_NodeObject *self, void *closure)
 {
-    if (self->node->ns && self->node->ns->prefix)
-        return PyUnicode_FromString((const char *)self->node->ns->prefix);
+    xmlNsPtr ns = node_ns(self->node);
+    if (ns && ns->prefix)
+        return PyUnicode_FromString((const char *)ns->prefix);
     Py_RETURN_NONE;
 }
 
 static PyObject *
 node_get_namespaceURI(LibXML_NodeObject *self, void *closure)
 {
-    if (self->node->ns && self->node->ns->href && self->node->ns->href[0] != '\0')
-        return PyUnicode_FromString((const char *)self->node->ns->href);
+    xmlNsPtr ns = node_ns(self->node);
+    if (ns && ns->href && ns->href[0] != '\0')
+        return PyUnicode_FromString((const char *)ns->href);
     Py_RETURN_NONE;
 }
 
@@ -142,10 +183,15 @@ node_get_nodeType(LibXML_NodeObject *self, void *closure)
 static PyObject *
 node_get_nodeValue(LibXML_NodeObject *self, void *closure)
 {
-    /* DOM: nodeValue is null for Element, Document, DocumentFragment */
-    xmlElementType t = self->node->type;
-    if (t == XML_ELEMENT_NODE || t == XML_DOCUMENT_NODE ||
-        t == XML_DOCUMENT_FRAG_NODE) {
+    switch (self->node->type) {
+    case XML_ATTRIBUTE_NODE:
+    case XML_TEXT_NODE:
+    case XML_COMMENT_NODE:
+    case XML_CDATA_SECTION_NODE:
+    case XML_PI_NODE:
+    case XML_ENTITY_REF_NODE:
+        break;
+    default:
         Py_RETURN_NONE;
     }
     xmlChar *content = xmlNodeGetContent(self->node);
@@ -297,7 +343,7 @@ node_appendChild(LibXML_NodeObject *self, PyObject *args)
 
     xmlNodePtr first = inserted_node(child->node);
     if (LibXML_insert_node(child->node, self->node, NULL) < 0) return NULL;
-    return LibXML_Node_Wrap(first);
+    return LibXML_Node_Wrap(first ? first : child->node);
 }
 
 /* Parse a reference node argument: a Node, or None for "at the end". */
@@ -465,9 +511,13 @@ node_addSibling(LibXML_NodeObject *self, PyObject *args)
 
     /* As in libxml2, adjacent text is merged. new_node survives, detached. */
     if (last->type == XML_TEXT_NODE && newn->type == XML_TEXT_NODE && last != newn) {
+        /* Taken first: if newn is self, it may hold the last reference to the
+         * tree that holds `last`. */
+        PyObject *result = LibXML_Node_Wrap(last);
+        if (result == NULL) return NULL;
         xmlNodeAddContent(last, newn->content);
         LibXML_detach_node(newn);
-        return LibXML_Node_Wrap(last);
+        return result;
     }
 
     if (self->node->parent == NULL) {
@@ -563,53 +613,50 @@ node_toString(LibXML_NodeObject *self, PyObject *args, PyObject *kwds)
 /* XPath: findnodes / find / findvalue / exists                        */
 /* ------------------------------------------------------------------ */
 
-/* Register in-scope namespace declarations from the context node.
- * This allows XPath expressions to use prefix:localname syntax. */
-static void
-register_inscope_ns(xmlXPathContextPtr ctx, xmlNodePtr node, xmlDocPtr doc)
+/* Evaluate an XPath expression with self as context node. The prefixes in scope
+ * there can be used, and those of the root element for a document. */
+static xmlXPathObjectPtr
+node_eval(LibXML_NodeObject *self, PyObject *args)
 {
-    if (!node || node->type == XML_DOCUMENT_NODE ||
-        node->type == XML_HTML_DOCUMENT_NODE)
-        return;
-    xmlNsPtr *nsList = xmlGetNsList(doc, node);
-    if (!nsList) return;
-    int count = 0;
-    while (nsList[count]) count++;
-    ctx->namespaces = nsList;  /* xmlXPathFreeContext will xmlFree() this */
-    ctx->nsNr  = count;
+    const char *expr;
+    if (!PyArg_ParseTuple(args, "s", &expr)) return NULL;
+
+    xmlDocPtr doc = self->node->doc;
+    xmlXPathContextPtr ctx = xmlXPathNewContext(doc);
+    if (ctx == NULL) {
+        PyErr_NoMemory();
+        return NULL;
+    }
+    ctx->node = self->node;
+
+    xmlNodePtr scope = self->node;
+    if (scope->type == XML_DOCUMENT_NODE || scope->type == XML_HTML_DOCUMENT_NODE)
+        scope = xmlDocGetRootElement(doc);
+    if (scope != NULL)
+        ctx->namespaces = xmlGetNsList(doc, scope);
+    if (ctx->namespaces != NULL) {
+        while (ctx->namespaces[ctx->nsNr] != NULL)
+            ctx->nsNr++;
+    }
+
+    xmlXPathObjectPtr xobj = xmlXPathEvalExpression(BAD_CAST expr, ctx);
+    xmlFree(ctx->namespaces);
+    ctx->namespaces = NULL;
+    xmlXPathFreeContext(ctx);
+
+    if (xobj == NULL)
+        LibXML_raise_last_error();
+    return xobj;
 }
 
 static PyObject *
 node_findnodes(LibXML_NodeObject *self, PyObject *args)
 {
-    const char *expr;
-    if (!PyArg_ParseTuple(args, "s", &expr)) return NULL;
+    xmlXPathObjectPtr xobj = node_eval(self, args);
+    if (xobj == NULL) return NULL;
 
-    xmlDocPtr doc = LibXML_DOC_FROM_NODE(self);
-    if (doc == NULL) {
-        PyErr_SetString(LibXML_Error, "node has no document");
-        return NULL;
-    }
-
-    xmlXPathContextPtr ctx = xmlXPathNewContext(doc);
-    if (ctx == NULL) return PyErr_NoMemory();
-    ctx->node = self->node;
-    register_inscope_ns(ctx, self->node, doc);
-
-    xmlXPathObjectPtr xobj = xmlXPathEvalExpression(BAD_CAST expr, ctx);
-    xmlXPathFreeContext(ctx);
-
-    if (xobj == NULL) {
-        LibXML_raise_last_error();
-        return NULL;
-    }
-
-    PyObject *result;
-    if (xobj->type == XPATH_NODESET) {
-        result = LibXML_NodeList_FromNodeSet(xobj->nodesetval);
-    } else {
-        result = LibXML_NodeList_FromNodeSet(NULL);
-    }
+    PyObject *result = LibXML_NodeList_FromNodeSet(
+        xobj->type == XPATH_NODESET ? xobj->nodesetval : NULL);
     xmlXPathFreeObject(xobj);
     return result;
 }
@@ -617,27 +664,8 @@ node_findnodes(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 node_find(LibXML_NodeObject *self, PyObject *args)
 {
-    const char *expr;
-    if (!PyArg_ParseTuple(args, "s", &expr)) return NULL;
-
-    xmlDocPtr doc = LibXML_DOC_FROM_NODE(self);
-    if (doc == NULL) {
-        PyErr_SetString(LibXML_Error, "node has no document");
-        return NULL;
-    }
-
-    xmlXPathContextPtr ctx = xmlXPathNewContext(doc);
-    if (ctx == NULL) return PyErr_NoMemory();
-    ctx->node = self->node;
-    register_inscope_ns(ctx, self->node, doc);
-
-    xmlXPathObjectPtr xobj = xmlXPathEvalExpression(BAD_CAST expr, ctx);
-    xmlXPathFreeContext(ctx);
-
-    if (xobj == NULL) {
-        LibXML_raise_last_error();
-        return NULL;
-    }
+    xmlXPathObjectPtr xobj = node_eval(self, args);
+    if (xobj == NULL) return NULL;
 
     PyObject *result = LibXML_xpath_to_python(xobj);
     xmlXPathFreeObject(xobj);
@@ -647,44 +675,20 @@ node_find(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 node_findvalue(LibXML_NodeObject *self, PyObject *args)
 {
-    const char *expr;
-    if (!PyArg_ParseTuple(args, "s", &expr)) return NULL;
-
-    xmlDocPtr doc = LibXML_DOC_FROM_NODE(self);
-    if (doc == NULL) {
-        PyErr_SetString(LibXML_Error, "node has no document");
-        return NULL;
-    }
-
-    xmlXPathContextPtr ctx = xmlXPathNewContext(doc);
-    if (ctx == NULL) return PyErr_NoMemory();
-    ctx->node = self->node;
-    register_inscope_ns(ctx, self->node, doc);
-
-    xmlXPathObjectPtr xobj = xmlXPathEvalExpression(BAD_CAST expr, ctx);
-    xmlXPathFreeContext(ctx);
-
-    if (xobj == NULL) {
-        LibXML_raise_last_error();
-        return NULL;
-    }
+    xmlXPathObjectPtr xobj = node_eval(self, args);
+    if (xobj == NULL) return NULL;
 
     /* For nodesets, concatenate all text (Perl to_literal behaviour).
      * For other types, cast to string via XPath rules. */
     xmlChar *str;
     if (xobj->type == XPATH_NODESET) {
         xmlNodeSetPtr ns = xobj->nodesetval;
-        if (!ns || ns->nodeNr == 0) {
-            xmlXPathFreeObject(xobj);
-            return PyUnicode_FromString("");
-        }
         str = xmlStrdup(BAD_CAST "");
-        for (int i = 0; i < ns->nodeNr; i++) {
+        for (int i = 0; ns != NULL && i < ns->nodeNr; i++) {
             xmlChar *content = xmlNodeGetContent(ns->nodeTab[i]);
             if (content) {
-                xmlChar *tmp = xmlStrcat(str, content);
+                str = xmlStrcat(str, content);
                 xmlFree(content);
-                str = tmp;
             }
         }
     } else {
@@ -701,26 +705,8 @@ node_findvalue(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 node_exists(LibXML_NodeObject *self, PyObject *args)
 {
-    const char *expr;
-    if (!PyArg_ParseTuple(args, "s", &expr)) return NULL;
-
-    xmlDocPtr doc = LibXML_DOC_FROM_NODE(self);
-    if (doc == NULL) {
-        PyErr_SetString(LibXML_Error, "node has no document");
-        return NULL;
-    }
-
-    xmlXPathContextPtr ctx = xmlXPathNewContext(doc);
-    if (ctx == NULL) return PyErr_NoMemory();
-    ctx->node = self->node;
-
-    xmlXPathObjectPtr xobj = xmlXPathEvalExpression(BAD_CAST expr, ctx);
-    xmlXPathFreeContext(ctx);
-
-    if (xobj == NULL) {
-        LibXML_raise_last_error();
-        return NULL;
-    }
+    xmlXPathObjectPtr xobj = node_eval(self, args);
+    if (xobj == NULL) return NULL;
 
     int val = xmlXPathCastToBoolean(xobj);
     xmlXPathFreeObject(xobj);
@@ -734,11 +720,11 @@ node_exists(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 node_lookupNamespaceURI(LibXML_NodeObject *self, PyObject *args)
 {
-    const char *prefix;
-    if (!PyArg_ParseTuple(args, "z", &prefix)) return NULL;
+    const char *prefix = NULL;
+    if (!PyArg_ParseTuple(args, "|z", &prefix)) return NULL;
+    if (prefix && prefix[0] == '\0') prefix = NULL;
 
-    xmlNsPtr ns = xmlSearchNs(self->node->doc, self->node,
-                              prefix ? BAD_CAST prefix : NULL);
+    xmlNsPtr ns = xmlSearchNs(self->node->doc, self->node, BAD_CAST prefix);
     if (ns == NULL || ns->href == NULL) Py_RETURN_NONE;
     return PyUnicode_FromString((const char *)ns->href);
 }
@@ -747,40 +733,43 @@ static PyObject *
 node_lookupNamespacePrefix(LibXML_NodeObject *self, PyObject *args)
 {
     const char *uri;
-    if (!PyArg_ParseTuple(args, "s", &uri)) return NULL;
+    if (!PyArg_ParseTuple(args, "z", &uri)) return NULL;
+    if (uri == NULL || uri[0] == '\0') Py_RETURN_NONE;
 
     xmlNsPtr ns = xmlSearchNsByHref(self->node->doc, self->node, BAD_CAST uri);
-    if (ns == NULL || ns->prefix == NULL) Py_RETURN_NONE;
-    return PyUnicode_FromString((const char *)ns->prefix);
+    if (ns == NULL) Py_RETURN_NONE;
+    return PyUnicode_FromString(ns->prefix ? (const char *)ns->prefix : "");
 }
 
 /* ------------------------------------------------------------------ */
-/* getNamespaces — returns list of (prefix, uri) tuples               */
+/* Namespace declarations of this element                              */
 /* ------------------------------------------------------------------ */
 
 static PyObject *
 node_getNamespaces(LibXML_NodeObject *self, PyObject *args)
 {
-    if (self->node->type != XML_ELEMENT_NODE)
-        return PyList_New(0);
-
-    xmlNsPtr *nsList = xmlGetNsList(self->node->doc, self->node);
-    if (nsList == NULL) return PyList_New(0);
-
     PyObject *result = PyList_New(0);
-    for (int i = 0; nsList[i] != NULL; i++) {
-        const char *prefix = nsList[i]->prefix ?
-            (const char *)nsList[i]->prefix : "";
-        const char *href = nsList[i]->href ?
-            (const char *)nsList[i]->href : "";
-        PyObject *tup = PyTuple_Pack(2,
-            PyUnicode_FromString(prefix),
-            PyUnicode_FromString(href));
-        PyList_Append(result, tup);
-        Py_DECREF(tup);
+    if (result == NULL || self->node->type != XML_ELEMENT_NODE) return result;
+
+    for (xmlNsPtr ns = self->node->nsDef; ns; ns = ns->next) {
+        if (ns->prefix == NULL && ns->href == NULL) continue;
+        PyObject *item = LibXML_Namespace_Copy(ns);
+        if (item == NULL || PyList_Append(result, item) < 0) {
+            Py_XDECREF(item);
+            Py_DECREF(result);
+            return NULL;
+        }
+        Py_DECREF(item);
     }
-    xmlFree(nsList);
     return result;
+}
+
+static PyObject *
+node_getNamespace(LibXML_NodeObject *self, PyObject *args)
+{
+    xmlNsPtr ns = node_ns(self->node);
+    if (ns == NULL) Py_RETURN_NONE;
+    return LibXML_Namespace_Copy(ns);
 }
 
 /* ------------------------------------------------------------------ */
@@ -798,27 +787,29 @@ node_hasAttributes(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 node_attributes(LibXML_NodeObject *self, PyObject *args)
 {
-    /* Returns a list of Attr wrappers + namespace declaration wrappers */
+    /* Attributes first, then namespace declarations, as in Perl */
     PyObject *list = PyList_New(0);
-    if (self->node->type != XML_ELEMENT_NODE) return list;
+    if (list == NULL || self->node->type != XML_ELEMENT_NODE) return list;
 
-    /* Namespace declarations (nsDef chain) */
-    xmlNsPtr ns = self->node->nsDef;
-    while (ns) {
-        PyObject *a = LibXML_Namespace_Copy(ns);
-        if (a == NULL) { Py_DECREF(list); return NULL; }
-        PyList_Append(list, a);
+    for (xmlAttrPtr attr = self->node->properties; attr; attr = attr->next) {
+        PyObject *a = LibXML_Node_Wrap((xmlNodePtr)attr);
+        if (a == NULL || PyList_Append(list, a) < 0) {
+            Py_XDECREF(a);
+            Py_DECREF(list);
+            return NULL;
+        }
         Py_DECREF(a);
-        ns = ns->next;
     }
 
-    /* Regular attributes */
-    xmlAttrPtr attr = self->node->properties;
-    while (attr) {
-        PyObject *a = LibXML_Node_Wrap((xmlNodePtr)attr);
-        PyList_Append(list, a);
+    for (xmlNsPtr ns = self->node->nsDef; ns; ns = ns->next) {
+        if (ns->prefix == NULL && ns->href == NULL) continue;
+        PyObject *a = LibXML_Namespace_Copy(ns);
+        if (a == NULL || PyList_Append(list, a) < 0) {
+            Py_XDECREF(a);
+            Py_DECREF(list);
+            return NULL;
+        }
         Py_DECREF(a);
-        attr = attr->next;
     }
     return list;
 }
@@ -830,6 +821,15 @@ node_setOwnerDocument(LibXML_NodeObject *self, PyObject *args)
     if (!PyArg_ParseTuple(args, "O!", &LibXML_NodeType, &doc_arg)) return NULL;
 
     if (LibXML_adopt_node(self->node, doc_arg->node->doc) < 0) return NULL;
+    Py_RETURN_NONE;
+}
+
+static PyObject *
+node_setNodeName(LibXML_NodeObject *self, PyObject *args)
+{
+    const char *name;
+    if (!PyArg_ParseTuple(args, "s", &name)) return NULL;
+    if (LibXML_set_node_name(self->node, name) < 0) return NULL;
     Py_RETURN_NONE;
 }
 
@@ -908,7 +908,13 @@ static PyMethodDef LibXML_Node_methods[] = {
     {"exists",               (PyCFunction)node_exists,                METH_VARARGS, "Return True if XPath matches"},
     {"lookupNamespaceURI",   (PyCFunction)node_lookupNamespaceURI,    METH_VARARGS, "Look up namespace URI for prefix"},
     {"lookupNamespacePrefix",(PyCFunction)node_lookupNamespacePrefix, METH_VARARGS, "Look up prefix for namespace URI"},
-    {"getNamespaces",        (PyCFunction)node_getNamespaces,         METH_NOARGS,  "Return list of (prefix, uri) tuples"},
+    {"getNamespaces",        (PyCFunction)node_getNamespaces,         METH_NOARGS,  "Return the namespaces declared on this element"},
+    {"namespaces",           (PyCFunction)node_getNamespaces,         METH_NOARGS,  "Return the namespaces declared on this element"},
+    {"getNamespace",         (PyCFunction)node_getNamespace,          METH_NOARGS,  "Return the namespace of this node"},
+    {"localNS",              (PyCFunction)node_getNamespace,          METH_NOARGS,  "Return the namespace of this node"},
+    {"localNamespace",       (PyCFunction)node_getNamespace,          METH_NOARGS,  "Return the namespace of this node"},
+    {"setNodeName",          (PyCFunction)node_setNodeName,           METH_VARARGS, "Rename this node"},
+    {"setName",              (PyCFunction)node_setNodeName,           METH_VARARGS, "Rename this node"},
     {"hasAttributes",        (PyCFunction)node_hasAttributes,         METH_NOARGS,  "Return True if node has attributes"},
     {"attributes",           (PyCFunction)node_attributes,            METH_NOARGS,  "Return list of Attr nodes"},
     {"unique_key",           (PyCFunction)node_unique_key,            METH_NOARGS,  "Return unique integer key for this node"},

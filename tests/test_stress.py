@@ -52,6 +52,7 @@ def scan(node):
     # Touch everything reachable from a node.
     node.nodeName, node.nodeType, node.nodeValue, node.textContent
     node.parentNode, node.ownerDocument, node.previousSibling, node.nextSibling
+    node.prefix, node.namespaceURI, node.localname, node.getNamespaces()
     for child in node.childNodes():
         remember(child)
     if node.firstChild is not None:
@@ -65,6 +66,12 @@ def scan(node):
 def op_grab():
     node = rng.choice(docs)
     for hit in node.findnodes(rng.choice(['//*', '//text()', '//@*', '//comment()', '/*'])):
+        remember(hit)
+    for hit in rng.choice([
+            lambda: node.getElementsByTagName('*'),
+            lambda: node.getElementsByLocalName('s'),
+            lambda: node.getElementsByTagNameNS('*', 't'),
+            lambda: node.documentElement.getChildrenByTagName('*')])():
         remember(hit)
 
 
@@ -138,6 +145,17 @@ def op_content():
         lambda: a.removeAttributeNode(pick()),
         lambda: a.appendText('more'),
         lambda: a.appendData('more'),
+        lambda: a.setNamespaceDeclURI('p', rng.choice([None, 'urn:new'])),
+        lambda: a.setNamespaceDeclPrefix('p', 'q'),
+        lambda: a.setNamespace('urn:s', 's', rng.randint(0, 1)),
+        lambda: a.setNodeName('renamed'),
+        lambda: a.setAttribute('xmlns:z', 'urn:z'),
+        lambda: a.setAttribute('xmlns', rng.choice(['urn:d', ''])),
+        lambda: a.appendWellBalancedChunk('<w>x</w>y'),
+        lambda: remember(a.addNewChild('urn:p', 'p:added')),
+        lambda: a.replaceData(1, 1, 'r'),
+        lambda: a.deleteData(0, 1),
+        lambda: a.insertData(1, 'i'),
         lambda: setattr(a, 'value', 'v2'),
         lambda: a.setCargo([1, 2]),
         lambda: a.getCargo(),

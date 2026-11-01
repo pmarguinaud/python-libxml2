@@ -24,4 +24,7 @@ extern PyTypeObject LibXML_ParserType;
 /* Build libxml2 parser options int from a ParserObject */
 int LibXML_parser_options(LibXML_ParserObject *self);
 
+/* Parse a well-balanced chunk into a DocumentFragment. */
+PyObject *LibXML_parse_chunk(const char *chunk);
+
 #endif /* LIBXML_PARSER_H */

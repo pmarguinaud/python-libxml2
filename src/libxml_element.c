@@ -1,71 +1,70 @@
 #include "libxml_element.h"
 #include "libxml_utils.h"
 #include "libxml_tree.h"
+#include "libxml_parser.h"
 #include "libxml_nodelist.h"
 #include "libxml_attr.h"
 #include "libxml_document.h"
 #include <string.h>
 
+#define XMLNS_URI "http://www.w3.org/2000/xmlns/"
+#define XML_URI   "http://www.w3.org/XML/1998/namespace"
+
 /* ------------------------------------------------------------------ */
 /* Helpers for qualified-name attribute lookup (prefix:localname)     */
 /* ------------------------------------------------------------------ */
 
-/* Resolve prefix to URI and look up attribute. Returns NULL if not found. */
+/* Find an attribute by name, or by prefix:localname through the namespace bound
+ * to the prefix. Defaults from a DTD do not count. */
 static xmlAttrPtr
-elem_ha_qname(xmlNodePtr node, const char *name)
+get_attr_node(xmlNodePtr node, const char *qname)
 {
-    const char *colon = strchr(name, ':');
-    if (!colon) {
-        /* No prefix: match only no-namespace attributes (DOM Level 2 semantics) */
-        return xmlHasNsProp(node, BAD_CAST name, NULL);
+    xmlAttrPtr ret = xmlHasNsProp(node, BAD_CAST qname, NULL);
+
+    if (ret == NULL) {
+        xmlChar *prefix = NULL;
+        xmlChar *local = xmlSplitQName2(BAD_CAST qname, &prefix);
+        if (local != NULL) {
+            xmlNsPtr ns = xmlSearchNs(node->doc, node, prefix);
+            if (ns != NULL)
+                ret = xmlHasNsProp(node, local, ns->href);
+            xmlFree(prefix);
+            xmlFree(local);
+        }
     }
-    int plen = (int)(colon - name);
-    char prefix[128];
-    if (plen >= (int)sizeof(prefix) - 1) plen = (int)sizeof(prefix) - 2;
-    memcpy(prefix, name, plen); prefix[plen] = '\0';
-    const char *localname = colon + 1;
-    xmlNsPtr ns = xmlSearchNs(node->doc, node, BAD_CAST prefix);
-    const xmlChar *ns_uri = ns ? ns->href : NULL;
-    return xmlHasNsProp(node, BAD_CAST localname, ns_uri);
+    return (ret && ret->type == XML_ATTRIBUTE_NODE) ? ret : NULL;
 }
 
-static xmlChar *
-elem_get_qname(xmlNodePtr node, const char *name)
+/* Name of a namespace declaration attribute: returns the prefix (NULL for the
+ * default namespace) in *prefix, and 1 if name is one. */
+static int
+parse_xmlns_name(const char *name, const char **prefix)
 {
-    /* Handle xmlns: declarations: look in nsDef chain */
-    if (strcmp(name, "xmlns") == 0) {
-        xmlNsPtr ns = node->nsDef;
-        while (ns) {
-            if (!ns->prefix)  /* default namespace */
-                return ns->href ? xmlStrdup(ns->href) : NULL;
-            ns = ns->next;
-        }
-        return NULL;
-    }
-    if (strncmp(name, "xmlns:", 6) == 0 && name[6] != '\0') {
-        const char *prefix = name + 6;
-        xmlNsPtr ns = node->nsDef;
-        while (ns) {
-            if (ns->prefix && xmlStrEqual(ns->prefix, BAD_CAST prefix))
-                return ns->href ? xmlStrdup(ns->href) : NULL;
-            ns = ns->next;
-        }
-        return NULL;
-    }
+    if (strncmp(name, "xmlns", 5) != 0) return 0;
+    if (name[5] == '\0') { *prefix = NULL; return 1; }
+    if (name[5] == ':')  { *prefix = name[6] ? name + 6 : NULL; return 1; }
+    return 0;
+}
 
-    const char *colon = strchr(name, ':');
-    if (!colon) {
-        /* No prefix: return value of no-namespace attribute */
-        return xmlGetNsProp(node, BAD_CAST name, NULL);
+static PyObject *
+decl_uri(xmlNodePtr node, const char *prefix)
+{
+    for (xmlNsPtr ns = node->nsDef; ns; ns = ns->next) {
+        if ((ns->prefix || ns->href) && xmlStrEqual(ns->prefix, BAD_CAST prefix)) {
+            if (ns->href == NULL) Py_RETURN_NONE;
+            return PyUnicode_FromString((const char *)ns->href);
+        }
     }
-    int plen = (int)(colon - name);
-    char prefix[128];
-    if (plen >= (int)sizeof(prefix) - 1) plen = (int)sizeof(prefix) - 2;
-    memcpy(prefix, name, plen); prefix[plen] = '\0';
-    const char *localname = colon + 1;
-    xmlNsPtr ns = xmlSearchNs(node->doc, node, BAD_CAST prefix);
-    const xmlChar *ns_uri = ns ? ns->href : NULL;
-    return xmlGetNsProp(node, BAD_CAST localname, ns_uri);
+    Py_RETURN_NONE;
+}
+
+static PyObject *
+take_string(xmlChar *value)
+{
+    if (value == NULL) Py_RETURN_NONE;
+    PyObject *ret = PyUnicode_FromString((const char *)value);
+    xmlFree(value);
+    return ret;
 }
 
 /* ------------------------------------------------------------------ */
@@ -81,6 +80,8 @@ LibXML_Element_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "s|z", kwlist, &name, &ns_uri))
         return NULL;
+
+    if (LibXML_check_name(name) < 0) return NULL;
 
     PyObject *doc = LibXML_new_hidden_doc();
     if (doc == NULL) return NULL;
@@ -101,18 +102,6 @@ LibXML_Element_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 }
 
 /* ------------------------------------------------------------------ */
-/* Helper: find namespace by URI on an element                        */
-/* ------------------------------------------------------------------ */
-
-static xmlNsPtr
-find_or_create_ns(xmlNodePtr node, const char *ns_uri, const char *prefix)
-{
-    xmlNsPtr ns = xmlSearchNsByHref(node->doc, node, BAD_CAST ns_uri);
-    if (ns) return ns;
-    return xmlNewNs(node, BAD_CAST ns_uri, prefix ? BAD_CAST prefix : NULL);
-}
-
-/* ------------------------------------------------------------------ */
 /* Attribute methods                                                   */
 /* ------------------------------------------------------------------ */
 
@@ -129,109 +118,180 @@ set_attr(xmlNodePtr node, xmlNsPtr ns, const char *name, const char *value)
     return xmlSetNsProp(node, ns, BAD_CAST name, BAD_CAST value);
 }
 
+/* Change the URI of a declaration on this element. Returns 1 if there is one. */
+static int
+set_decl_uri(xmlNodePtr node, const char *prefix, const char *uri)
+{
+    if (prefix && prefix[0] == '\0') prefix = NULL;
+    if (uri && uri[0] == '\0') uri = NULL;
+
+    for (xmlNsPtr ns = node->nsDef; ns; ns = ns->next) {
+        if ((ns->prefix || ns->href) && xmlStrEqual(ns->prefix, BAD_CAST prefix)) {
+            xmlFree((xmlChar *)ns->href);
+            ns->href = uri ? xmlStrdup(BAD_CAST uri) : NULL;
+            /* The declaration stays, unused, as it does in Perl. */
+            if (uri == NULL)
+                LibXML_forget_ns(node, ns);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Declare a namespace, and with activate put the element in it. */
+static int
+set_namespace(xmlNodePtr node, const char *uri, const char *prefix, int activate)
+{
+    xmlNsPtr ns = NULL;
+    int done;
+    char *name = activate ? strdup((const char *)node->name) : NULL;
+
+    if (prefix && prefix[0] == '\0') prefix = NULL;
+    if (uri && uri[0] == '\0') uri = NULL;
+
+    if (prefix == NULL && uri == NULL) {
+        ns = xmlSearchNs(node->doc, node, NULL);
+        if (ns && ns->href && ns->href[0] != '\0') {
+            done = 0;   /* an inherited default namespace cannot be left */
+        } else if (activate) {
+            xmlSetNs(node, NULL);
+            done = 1;
+        } else {
+            done = 0;
+        }
+        ns = NULL;
+    } else if (activate && (ns = xmlSearchNs(node->doc, node, BAD_CAST prefix)) != NULL
+               && xmlStrEqual(ns->href, BAD_CAST uri)) {
+        done = 1;       /* reuse the declaration */
+    } else {
+        ns = xmlNewNs(node, BAD_CAST uri, BAD_CAST prefix);
+        done = (ns != NULL);
+    }
+
+    if (activate && ns != NULL)
+        xmlSetNs(node, ns);
+
+    /* The element may have had the prefix in its name. */
+    if (done && activate && LibXML_set_node_name(node, name) < 0)
+        PyErr_Clear();
+    free(name);
+    return done;
+}
+
+/* An xmlns or xmlns:prefix attribute changes a declaration. */
+static PyObject *
+set_xmlns_attr(xmlNodePtr node, const char *prefix, const char *value)
+{
+    int activate = 0;
+
+    if (prefix != NULL && node->ns == NULL) {
+        size_t len = strlen(prefix);
+        activate = strncmp((const char *)node->name, prefix, len) == 0
+                && node->name[len] == ':';
+    } else if (prefix != NULL && node->ns->prefix != NULL) {
+        activate = strcmp((const char *)node->ns->prefix, prefix) == 0;
+    }
+
+    int done = set_decl_uri(node, prefix, value)
+            || set_namespace(node, value, prefix, activate);
+    return PyBool_FromLong(done);
+}
+
 static PyObject *
 elem_setAttribute(LibXML_NodeObject *self, PyObject *args)
 {
-    const char *name, *value;
+    const char *name, *value, *decl_prefix;
     if (!PyArg_ParseTuple(args, "ss", &name, &value)) return NULL;
 
-    /* Intercept xmlns: and xmlns declarations to create real NS nodes */
-    if (strcmp(name, "xmlns") == 0) {
-        /* Default namespace declaration */
-        xmlNsPtr existing = xmlSearchNs(self->node->doc, self->node, NULL);
-        if (existing) {
-            xmlFree((void *)existing->href);
-            existing->href = value[0] ? xmlStrdup(BAD_CAST value) : NULL;
-        } else {
-            xmlNewNs(self->node, value[0] ? BAD_CAST value : NULL, NULL);
-        }
-        Py_RETURN_NONE;
-    } else if (strncmp(name, "xmlns:", 6) == 0) {
-        /* Prefixed namespace declaration */
-        const char *prefix = name + 6;
-        if (*prefix == '\0') { PyErr_SetString(PyExc_ValueError, "empty prefix"); return NULL; }
-        xmlNsPtr existing = xmlSearchNs(self->node->doc, self->node, BAD_CAST prefix);
-        if (existing && existing->prefix &&
-            xmlStrEqual(existing->prefix, BAD_CAST prefix)) {
-            xmlFree((void *)existing->href);
-            existing->href = value[0] ? xmlStrdup(BAD_CAST value) : NULL;
-        } else {
-            xmlNewNs(self->node, BAD_CAST value, BAD_CAST prefix);
-        }
-        Py_RETURN_NONE;
-    }
+    if (parse_xmlns_name(name, &decl_prefix))
+        return set_xmlns_attr(self->node, decl_prefix, value);
 
-    /* For qualified names (prefix:local), resolve namespace and set NS prop */
-    const char *colon = strchr(name, ':');
-    if (colon) {
-        int plen = (int)(colon - name);
-        char prefix[128];
-        if (plen >= (int)sizeof(prefix) - 1) plen = (int)sizeof(prefix) - 2;
-        memcpy(prefix, name, plen); prefix[plen] = '\0';
-        const char *localname = colon + 1;
-        xmlNsPtr ns = xmlSearchNs(self->node->doc, self->node, BAD_CAST prefix);
-        if (ns) {
-            set_attr(self->node, ns, localname, value);
-            Py_RETURN_NONE;
-        }
-        /* Unknown prefix: the name is kept as it is */
-    }
+    if (LibXML_check_name(name) < 0) return NULL;
 
-    xmlAttrPtr attr = set_attr(self->node, NULL, name, value);
+    /* A known prefix selects a namespace. An unknown one stays in the name. */
+    xmlChar *prefix = NULL;
+    xmlChar *local = xmlSplitQName2(BAD_CAST name, &prefix);
+    xmlNsPtr ns = local ? xmlSearchNs(self->node->doc, self->node, prefix) : NULL;
+
+    xmlAttrPtr attr = ns ? set_attr(self->node, ns, (const char *)local, value)
+                         : set_attr(self->node, NULL, name, value);
+    xmlFree(local);
+    xmlFree(prefix);
     if (attr == NULL) { LibXML_raise_last_error(); return NULL; }
     Py_RETURN_NONE;
 }
 
 static PyObject *
+namespace_error(const char *message)
+{
+    PyErr_Format(LibXML_Error, "NAMESPACE ERROR: %s", message);
+    return NULL;
+}
+
+/* The namespace for an attribute: it needs a prefix, so a default namespace
+ * does not do, and a prefixed declaration of the same URI is looked for. */
+static xmlNsPtr
+attr_ns_for(xmlNodePtr node, const char *uri, const xmlChar *prefix)
+{
+    xmlNsPtr ns = xmlSearchNsByHref(node->doc, node, BAD_CAST uri);
+
+    if (ns && !ns->prefix) {
+        xmlNsPtr *all = xmlGetNsList(node->doc, node);
+        ns = NULL;
+        for (int i = 0; all && all[i]; i++) {
+            if (all[i]->prefix && xmlStrEqual(all[i]->href, BAD_CAST uri)) {
+                ns = all[i];
+                break;
+            }
+        }
+        xmlFree(all);
+    }
+
+    if (ns == NULL && prefix != NULL && prefix[0] != '\0')
+        ns = xmlNewNs(node, BAD_CAST uri, prefix);
+    return ns;
+}
+
+static PyObject *
 elem_setAttributeNS(LibXML_NodeObject *self, PyObject *args)
 {
-    const char *ns_uri = NULL, *qname, *value;
+    const char *ns_uri = NULL, *qname, *value, *decl_prefix;
     if (!PyArg_ParseTuple(args, "zss", &ns_uri, &qname, &value)) return NULL;
+    if (ns_uri && ns_uri[0] == '\0') ns_uri = NULL;
 
-    /* Treat NULL or empty ns_uri as no-namespace */
-    if (!ns_uri || ns_uri[0] == '\0') {
-        /* Use just the local part (after colon if any) */
-        const char *colon = strchr(qname, ':');
-        const char *localname = colon ? colon + 1 : qname;
-        xmlAttrPtr attr = set_attr(self->node, NULL, localname, value);
-        if (attr == NULL) { LibXML_raise_last_error(); return NULL; }
-        Py_RETURN_NONE;
+    int is_xmlns = parse_xmlns_name(qname, &decl_prefix);
+
+    if (ns_uri && strcmp(ns_uri, XMLNS_URI) == 0) {
+        if (!is_xmlns)
+            return namespace_error("Namespace declarations must have the prefix 'xmlns'");
+        return set_xmlns_attr(self->node, decl_prefix, value);
     }
+    if (is_xmlns)
+        return namespace_error("'xmlns' prefix and qualified-name are reserved");
+    if (strchr(qname, ':') && ns_uri == NULL)
+        return namespace_error("Attribute without a prefix cannot be in a namespace");
+    if (strncmp(qname, "xml:", 4) == 0 && strcmp(ns_uri, XML_URI) != 0)
+        return namespace_error("'xml' prefix is reserved");
 
-    /* xmlns namespace: create real namespace declaration instead of regular attr */
-    if (strcmp(ns_uri, "http://www.w3.org/2000/xmlns/") == 0) {
-        const char *colon = strchr(qname, ':');
-        const char *prefix_for_decl = colon ? colon + 1 : NULL;
-        if (!prefix_for_decl && strcmp(qname, "xmlns") == 0)
-            prefix_for_decl = NULL; /* default namespace */
-        /* Find existing nsDef with this prefix and update, or create new */
-        xmlNsPtr ns = self->node->nsDef;
-        while (ns) {
-            int match = (prefix_for_decl == NULL && ns->prefix == NULL) ||
-                        (prefix_for_decl && ns->prefix &&
-                         xmlStrEqual(ns->prefix, BAD_CAST prefix_for_decl));
-            if (match) {
-                xmlFree((xmlChar *)ns->href);
-                ns->href = xmlStrdup(BAD_CAST value);
-                Py_RETURN_NONE;
-            }
-            ns = ns->next;
-        }
-        /* Create new namespace declaration */
-        xmlNewNs(self->node, BAD_CAST value,
-                 prefix_for_decl ? BAD_CAST prefix_for_decl : NULL);
-        Py_RETURN_NONE;
-    }
+    if (LibXML_check_name(qname) < 0) return NULL;
 
-    const char *colon = strchr(qname, ':');
     xmlChar *prefix = NULL;
-    const char *localname = colon ? colon + 1 : qname;
-    if (colon) prefix = xmlStrndup(BAD_CAST qname, (int)(colon - qname));
+    xmlChar *local = xmlSplitQName2(BAD_CAST qname, &prefix);
 
-    xmlNsPtr ns = find_or_create_ns(self->node, ns_uri, (const char *)prefix);
+    xmlNsPtr ns = NULL;
+    if (ns_uri != NULL) {
+        ns = attr_ns_for(self->node, ns_uri, prefix);
+        if (ns == NULL) {
+            xmlFree(local);
+            xmlFree(prefix);
+            PyErr_SetString(LibXML_Error, "bad ns attribute");
+            return NULL;
+        }
+    }
+
+    xmlAttrPtr attr = set_attr(self->node, ns, local ? (const char *)local : qname, value);
+    xmlFree(local);
     xmlFree(prefix);
-
-    xmlAttrPtr attr = set_attr(self->node, ns, localname, value);
     if (attr == NULL) { LibXML_raise_last_error(); return NULL; }
     Py_RETURN_NONE;
 }
@@ -239,27 +299,39 @@ elem_setAttributeNS(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 elem_getAttribute(LibXML_NodeObject *self, PyObject *args)
 {
-    const char *name;
+    const char *name, *decl_prefix;
     if (!PyArg_ParseTuple(args, "s", &name)) return NULL;
-    xmlChar *val = elem_get_qname(self->node, name);
-    if (val == NULL) Py_RETURN_NONE;
-    PyObject *ret = PyUnicode_FromString((const char *)val);
-    xmlFree(val);
-    return ret;
+
+    if (parse_xmlns_name(name, &decl_prefix))
+        return decl_uri(self->node, decl_prefix);
+
+    xmlChar *value = xmlGetNoNsProp(self->node, BAD_CAST name);
+    if (value == NULL) {
+        xmlChar *prefix = NULL;
+        xmlChar *local = xmlSplitQName2(BAD_CAST name, &prefix);
+        if (local != NULL) {
+            xmlNsPtr ns = xmlSearchNs(self->node->doc, self->node, prefix);
+            if (ns != NULL)
+                value = xmlGetNsProp(self->node, local, ns->href);
+            xmlFree(prefix);
+            xmlFree(local);
+        }
+    }
+    return take_string(value);
 }
 
 static PyObject *
 elem_getAttributeNS(LibXML_NodeObject *self, PyObject *args)
 {
-    const char *ns_uri = NULL, *localname;
-    if (!PyArg_ParseTuple(args, "zs", &ns_uri, &localname)) return NULL;
-    if (ns_uri && ns_uri[0] == '\0') ns_uri = NULL;
-    xmlChar *val = xmlGetNsProp(self->node, BAD_CAST localname,
-                                ns_uri ? BAD_CAST ns_uri : NULL);
-    if (val == NULL) Py_RETURN_NONE;
-    PyObject *ret = PyUnicode_FromString((const char *)val);
-    xmlFree(val);
-    return ret;
+    const char *ns_uri = NULL, *name;
+    if (!PyArg_ParseTuple(args, "zs", &ns_uri, &name)) return NULL;
+
+    if (ns_uri && strcmp(ns_uri, XMLNS_URI) == 0)
+        return decl_uri(self->node, strcmp(name, "xmlns") == 0 ? NULL : name);
+
+    if (ns_uri && ns_uri[0])
+        return take_string(xmlGetNsProp(self->node, BAD_CAST name, BAD_CAST ns_uri));
+    return take_string(xmlGetProp(self->node, BAD_CAST name));
 }
 
 static PyObject *
@@ -267,7 +339,7 @@ elem_getAttributeNode(LibXML_NodeObject *self, PyObject *args)
 {
     const char *name;
     if (!PyArg_ParseTuple(args, "s", &name)) return NULL;
-    xmlAttrPtr attr = elem_ha_qname(self->node, name);
+    xmlAttrPtr attr = get_attr_node(self->node, name);
     if (attr == NULL) Py_RETURN_NONE;
     return LibXML_Node_Wrap((xmlNodePtr)attr);
 }
@@ -278,9 +350,8 @@ elem_getAttributeNodeNS(LibXML_NodeObject *self, PyObject *args)
     const char *ns_uri = NULL, *localname;
     if (!PyArg_ParseTuple(args, "zs", &ns_uri, &localname)) return NULL;
     if (ns_uri && ns_uri[0] == '\0') ns_uri = NULL;
-    xmlAttrPtr attr = xmlHasNsProp(self->node, BAD_CAST localname,
-                                   ns_uri ? BAD_CAST ns_uri : NULL);
-    if (attr == NULL) Py_RETURN_NONE;
+    xmlAttrPtr attr = xmlHasNsProp(self->node, BAD_CAST localname, BAD_CAST ns_uri);
+    if (attr == NULL || attr->type != XML_ATTRIBUTE_NODE) Py_RETURN_NONE;
     return LibXML_Node_Wrap((xmlNodePtr)attr);
 }
 
@@ -289,8 +360,8 @@ elem_removeAttribute(LibXML_NodeObject *self, PyObject *args)
 {
     const char *name;
     if (!PyArg_ParseTuple(args, "s", &name)) return NULL;
-    xmlAttrPtr attr = elem_ha_qname(self->node, name);
-    if (attr == NULL || attr->type != XML_ATTRIBUTE_NODE) Py_RETURN_FALSE;
+    xmlAttrPtr attr = get_attr_node(self->node, name);
+    if (attr == NULL) Py_RETURN_FALSE;
     LibXML_release_node((xmlNodePtr)attr);
     Py_RETURN_TRUE;
 }
@@ -327,32 +398,7 @@ elem_hasAttribute(LibXML_NodeObject *self, PyObject *args)
 {
     const char *name;
     if (!PyArg_ParseTuple(args, "s", &name)) return NULL;
-
-    const char *colon = strchr(name, ':');
-    if (colon) {
-        /* Qualified name: match prefix:localname */
-        int prefix_len = (int)(colon - name);
-        const char *localname = colon + 1;
-        xmlAttrPtr prop = self->node->properties;
-        while (prop) {
-            if (xmlStrEqual(prop->name, BAD_CAST localname) &&
-                prop->ns && prop->ns->prefix &&
-                xmlStrncmp(prop->ns->prefix, BAD_CAST name, prefix_len) == 0 &&
-                prop->ns->prefix[prefix_len] == '\0')
-                return PyBool_FromLong(1);
-            prop = prop->next;
-        }
-        return PyBool_FromLong(0);
-    } else {
-        /* Unqualified name: match only no-namespace attributes */
-        xmlAttrPtr prop = self->node->properties;
-        while (prop) {
-            if (xmlStrEqual(prop->name, BAD_CAST name) && prop->ns == NULL)
-                return PyBool_FromLong(1);
-            prop = prop->next;
-        }
-        return PyBool_FromLong(0);
-    }
+    return PyBool_FromLong(get_attr_node(self->node, name) != NULL);
 }
 
 static PyObject *
@@ -361,11 +407,11 @@ elem_hasAttributeNS(LibXML_NodeObject *self, PyObject *args)
     const char *ns_uri = NULL, *localname;
     if (!PyArg_ParseTuple(args, "zs", &ns_uri, &localname)) return NULL;
     if (ns_uri && ns_uri[0] == '\0') ns_uri = NULL;
-    return PyBool_FromLong(
-        xmlHasNsProp(self->node, BAD_CAST localname,
-                     ns_uri ? BAD_CAST ns_uri : NULL) != NULL);
+    xmlAttrPtr attr = xmlHasNsProp(self->node, BAD_CAST localname, BAD_CAST ns_uri);
+    return PyBool_FromLong(attr != NULL && attr->type == XML_ATTRIBUTE_NODE);
 }
 
+/* Returns the attribute it replaced, if any. */
 static PyObject *
 elem_setAttributeNode(LibXML_NodeObject *self, PyObject *args)
 {
@@ -373,67 +419,126 @@ elem_setAttributeNode(LibXML_NodeObject *self, PyObject *args)
     if (!PyArg_ParseTuple(args, "O!", &LibXML_AttrType, &attr_wrap)) return NULL;
 
     xmlAttrPtr attr = (xmlAttrPtr)attr_wrap->node;
-    /* If already attached to same element, return it unchanged */
     if (attr->parent == self->node) {
         Py_INCREF(attr_wrap);
         return (PyObject *)attr_wrap;
     }
 
-    if (LibXML_insert_node((xmlNodePtr)attr, self->node, NULL) < 0) return NULL;
+    xmlAttrPtr same = LibXML_find_same_attr(self->node, attr);
+    PyObject *replaced = LibXML_Node_Wrap((xmlNodePtr)same);
+    if (replaced == NULL) return NULL;
 
-    Py_RETURN_NONE;
+    if (LibXML_insert_node((xmlNodePtr)attr, self->node, NULL) < 0) {
+        Py_DECREF(replaced);
+        return NULL;
+    }
+    return replaced;
 }
 
 /* ------------------------------------------------------------------ */
 /* Child/descendant element search                                     */
 /* ------------------------------------------------------------------ */
 
+typedef enum { MATCH_QNAME, MATCH_LOCAL, MATCH_NS } MatchKind;
+
+typedef struct {
+    xmlNodePtr top;
+    MatchKind kind;
+    const char *name;
+    const char *uri;
+    xmlNodeSetPtr found;
+} ElementSearch;
+
+static int
+matches_ns(xmlNodePtr node, const char *uri)
+{
+    if (strcmp(uri, "*") == 0) return 1;
+    const char *href = (node->ns && node->ns->href) ? (const char *)node->ns->href : "";
+    return strcmp(uri, href) == 0;
+}
+
+static int
+matches(xmlNodePtr node, MatchKind kind, const char *name, const char *uri)
+{
+    int any_name = strcmp(name, "*") == 0;
+
+    switch (kind) {
+    case MATCH_QNAME:
+        return any_name || LibXML_node_name_is(node, name);
+    case MATCH_LOCAL:
+        return any_name || strcmp((const char *)node->name, name) == 0;
+    default:
+        return (any_name || strcmp((const char *)node->name, name) == 0)
+            && matches_ns(node, uri);
+    }
+}
+
+static void
+search_visit(xmlNodePtr node, void *arg)
+{
+    ElementSearch *search = (ElementSearch *)arg;
+    if (node->type == XML_ELEMENT_NODE && node != search->top
+        && matches(node, search->kind, search->name, search->uri))
+        xmlXPathNodeSetAddUnique(search->found, node);
+}
+
+/* Elements below top, in document order, as a NodeList. */
+PyObject *
+LibXML_find_elements(xmlNodePtr top, int kind, const char *name, const char *uri)
+{
+    ElementSearch search = { top, (MatchKind)kind, name, uri, xmlXPathNodeSetCreate(NULL) };
+    if (search.found == NULL) return PyErr_NoMemory();
+
+    LibXML_walk_tree(top, search_visit, &search);
+
+    PyObject *result = LibXML_NodeList_FromNodeSet(search.found);
+    xmlXPathFreeNodeSet(search.found);
+    return result;
+}
+
+/* Direct children of an element, as a NodeList. */
+static PyObject *
+find_children(xmlNodePtr parent, MatchKind kind, const char *name, const char *uri)
+{
+    xmlNodeSetPtr found = xmlXPathNodeSetCreate(NULL);
+    if (found == NULL) return PyErr_NoMemory();
+
+    for (xmlNodePtr c = parent->children; c; c = c->next) {
+        /* By name, any node matches: getChildrenByTagName('#text') works. */
+        int match;
+        if (strcmp(name, "*") == 0)
+            match = c->type == XML_ELEMENT_NODE;
+        else if (kind == MATCH_QNAME)
+            match = LibXML_node_name_is(c, name);
+        else
+            match = c->name && strcmp((const char *)c->name, name) == 0;
+
+        if (match && kind == MATCH_NS)
+            match = c->type == XML_ELEMENT_NODE ? matches_ns(c, uri)
+                                                : strcmp(uri, "*") == 0 || uri[0] == '\0';
+        if (match)
+            xmlXPathNodeSetAddUnique(found, c);
+    }
+
+    PyObject *result = LibXML_NodeList_FromNodeSet(found);
+    xmlXPathFreeNodeSet(found);
+    return result;
+}
+
 static PyObject *
 elem_getChildrenByTagName(LibXML_NodeObject *self, PyObject *args)
 {
     const char *name;
     if (!PyArg_ParseTuple(args, "s", &name)) return NULL;
-
-    PyObject *list = PyList_New(0);
-    xmlNodePtr child = self->node->children;
-    while (child) {
-        if (child->type == XML_ELEMENT_NODE) {
-            int match = (strcmp(name, "*") == 0) ||
-                        (child->name && strcmp((const char *)child->name, name) == 0);
-            if (match) {
-                PyObject *w = LibXML_Node_Wrap(child);
-                PyList_Append(list, w);
-                Py_DECREF(w);
-            }
-        }
-        child = child->next;
-    }
-    return list;
+    return find_children(self->node, MATCH_QNAME, name, NULL);
 }
 
 static PyObject *
 elem_getChildrenByTagNameNS(LibXML_NodeObject *self, PyObject *args)
 {
     const char *ns_uri, *localname;
-    if (!PyArg_ParseTuple(args, "ss", &ns_uri, &localname)) return NULL;
-
-    PyObject *list = PyList_New(0);
-    xmlNodePtr child = self->node->children;
-    while (child) {
-        if (child->type == XML_ELEMENT_NODE) {
-            int name_match = (strcmp(localname, "*") == 0) ||
-                             (child->name && strcmp((const char *)child->name, localname) == 0);
-            int ns_match = child->ns && child->ns->href &&
-                           strcmp((const char *)child->ns->href, ns_uri) == 0;
-            if (name_match && ns_match) {
-                PyObject *w = LibXML_Node_Wrap(child);
-                PyList_Append(list, w);
-                Py_DECREF(w);
-            }
-        }
-        child = child->next;
-    }
-    return list;
+    if (!PyArg_ParseTuple(args, "zs", &ns_uri, &localname)) return NULL;
+    return find_children(self->node, MATCH_NS, localname, ns_uri ? ns_uri : "");
 }
 
 static PyObject *
@@ -441,22 +546,7 @@ elem_getChildrenByLocalName(LibXML_NodeObject *self, PyObject *args)
 {
     const char *localname;
     if (!PyArg_ParseTuple(args, "s", &localname)) return NULL;
-
-    PyObject *list = PyList_New(0);
-    xmlNodePtr child = self->node->children;
-    while (child) {
-        if (child->type == XML_ELEMENT_NODE) {
-            int match = (strcmp(localname, "*") == 0) ||
-                        (child->name && strcmp((const char *)child->name, localname) == 0);
-            if (match) {
-                PyObject *w = LibXML_Node_Wrap(child);
-                PyList_Append(list, w);
-                Py_DECREF(w);
-            }
-        }
-        child = child->next;
-    }
-    return list;
+    return find_children(self->node, MATCH_LOCAL, localname, NULL);
 }
 
 static PyObject *
@@ -464,64 +554,23 @@ elem_getElementsByTagName(LibXML_NodeObject *self, PyObject *args)
 {
     const char *name;
     if (!PyArg_ParseTuple(args, "s", &name)) return NULL;
-
-    xmlDocPtr doc = LibXML_DOC_FROM_NODE(self);
-    if (!doc) { PyErr_SetString(LibXML_Error, "no document"); return NULL; }
-
-    xmlXPathContextPtr ctx = xmlXPathNewContext(doc);
-    if (!ctx) return PyErr_NoMemory();
-    ctx->node = self->node;
-
-    char xpath[512];
-    if (strcmp(name, "*") == 0)
-        snprintf(xpath, sizeof(xpath), "descendant::*");
-    else
-        snprintf(xpath, sizeof(xpath), "descendant::%s", name);
-
-    xmlXPathObjectPtr xobj = xmlXPathEvalExpression(BAD_CAST xpath, ctx);
-    xmlXPathFreeContext(ctx);
-    if (!xobj) { LibXML_raise_last_error(); return NULL; }
-
-    PyObject *result = LibXML_NodeList_FromNodeSet(xobj->nodesetval);
-    xmlXPathFreeObject(xobj);
-    return result;
+    return LibXML_find_elements(self->node, MATCH_QNAME, name, NULL);
 }
 
 static PyObject *
 elem_getElementsByTagNameNS(LibXML_NodeObject *self, PyObject *args)
 {
     const char *ns_uri, *localname;
-    if (!PyArg_ParseTuple(args, "ss", &ns_uri, &localname)) return NULL;
-
-    xmlDocPtr doc = LibXML_DOC_FROM_NODE(self);
-    if (!doc) { PyErr_SetString(LibXML_Error, "no document"); return NULL; }
-
-    xmlXPathContextPtr ctx = xmlXPathNewContext(doc);
-    if (!ctx) return PyErr_NoMemory();
-    ctx->node = self->node;
-
-    xmlXPathRegisterNs(ctx, BAD_CAST "ns_", BAD_CAST ns_uri);
-
-    char xpath[512];
-    if (strcmp(localname, "*") == 0)
-        snprintf(xpath, sizeof(xpath), "descendant::ns_:*");
-    else
-        snprintf(xpath, sizeof(xpath), "descendant::ns_:%s", localname);
-
-    xmlXPathObjectPtr xobj = xmlXPathEvalExpression(BAD_CAST xpath, ctx);
-    xmlXPathFreeContext(ctx);
-    if (!xobj) { LibXML_raise_last_error(); return NULL; }
-
-    PyObject *result = LibXML_NodeList_FromNodeSet(xobj->nodesetval);
-    xmlXPathFreeObject(xobj);
-    return result;
+    if (!PyArg_ParseTuple(args, "zs", &ns_uri, &localname)) return NULL;
+    return LibXML_find_elements(self->node, MATCH_NS, localname, ns_uri ? ns_uri : "");
 }
 
 static PyObject *
 elem_getElementsByLocalName(LibXML_NodeObject *self, PyObject *args)
 {
-    /* Same as getElementsByTagName but ignoring namespace */
-    return elem_getElementsByTagName(self, args);
+    const char *localname;
+    if (!PyArg_ParseTuple(args, "s", &localname)) return NULL;
+    return LibXML_find_elements(self->node, MATCH_LOCAL, localname, NULL);
 }
 
 /* ------------------------------------------------------------------ */
@@ -572,19 +621,46 @@ elem_appendWellBalancedChunk(LibXML_NodeObject *self, PyObject *args)
     const char *chunk;
     if (!PyArg_ParseTuple(args, "s", &chunk)) return NULL;
 
-    xmlDocPtr doc = LibXML_DOC_FROM_NODE(self);
-    if (!doc) { PyErr_SetString(LibXML_Error, "no document"); return NULL; }
+    PyObject *frag = LibXML_parse_chunk(chunk);
+    if (frag == NULL) return NULL;
 
-    xmlNodePtr frag = xmlStringGetNodeList(doc, BAD_CAST chunk);
-    if (!frag) { LibXML_raise_last_error(); return NULL; }
-
-    xmlNodePtr cur = frag;
-    while (cur) {
-        xmlNodePtr next = cur->next;
-        xmlAddChild(self->node, cur);
-        cur = next;
-    }
+    int rc = LibXML_insert_node(LibXML_NODE(frag), self->node, NULL);
+    Py_DECREF(frag);
+    if (rc < 0) return NULL;
     Py_RETURN_NONE;
+}
+
+static PyObject *
+elem_addNewChild(LibXML_NodeObject *self, PyObject *args)
+{
+    const char *ns_uri = NULL, *name;
+    if (!PyArg_ParseTuple(args, "zs", &ns_uri, &name)) return NULL;
+    if (ns_uri && ns_uri[0] == '\0') ns_uri = NULL;
+    if (LibXML_check_name(name) < 0) return NULL;
+
+    xmlDocPtr doc = self->node->doc;
+    xmlNodePtr child;
+
+    if (ns_uri != NULL) {
+        xmlChar *prefix = NULL;
+        xmlChar *local = xmlSplitQName2(BAD_CAST name, &prefix);
+        xmlNsPtr ns = xmlSearchNsByHref(doc, self->node, BAD_CAST ns_uri);
+
+        child = xmlNewDocNode(doc, ns, local ? local : BAD_CAST name, NULL);
+        if (child != NULL && ns == NULL)
+            xmlSetNs(child, xmlNewNs(child, BAD_CAST ns_uri, prefix));
+        xmlFree(local);
+        xmlFree(prefix);
+    } else {
+        child = xmlNewDocNode(doc, NULL, BAD_CAST name, NULL);
+    }
+    if (child == NULL) return PyErr_NoMemory();
+
+    if (LibXML_insert_node(child, self->node, NULL) < 0) {
+        xmlFreeNode(child);
+        return NULL;
+    }
+    return LibXML_Node_Wrap(child);
 }
 
 /* ------------------------------------------------------------------ */
@@ -597,116 +673,45 @@ elem_setNamespace(LibXML_NodeObject *self, PyObject *args)
     const char *ns_uri = NULL, *prefix = NULL;
     int activate = 1;
     if (!PyArg_ParseTuple(args, "z|zi", &ns_uri, &prefix, &activate)) return NULL;
-
-    if (!ns_uri || ns_uri[0] == '\0') {
-        /* Empty/NULL URI: remove namespace from element */
-        xmlSetNs(self->node, NULL);
-        Py_RETURN_TRUE;
-    }
-
-    xmlNsPtr ns;
-    if (activate) {
-        ns = find_or_create_ns(self->node, ns_uri, prefix);
-        xmlSetNs(self->node, ns);
-    } else {
-        /* Just declare the namespace without activating */
-        xmlNewNs(self->node, BAD_CAST ns_uri, prefix ? BAD_CAST prefix : NULL);
-    }
-    Py_RETURN_TRUE;
+    return PyBool_FromLong(set_namespace(self->node, ns_uri, prefix, activate));
 }
-
-/* ------------------------------------------------------------------ */
-/* setNamespaceDeclURI / setNamespaceDeclPrefix                       */
-/* ------------------------------------------------------------------ */
 
 static PyObject *
 elem_setNamespaceDeclURI(LibXML_NodeObject *self, PyObject *args)
 {
-    const char *prefix;
-    PyObject *uri_obj;
-    if (!PyArg_ParseTuple(args, "zO", &prefix, &uri_obj)) return NULL;
-
-    /* Find the ns decl on this element with matching prefix */
-    xmlNsPtr ns = self->node->nsDef;
-    while (ns) {
-        int match = (prefix == NULL && ns->prefix == NULL) ||
-                    (prefix && ns->prefix &&
-                     xmlStrEqual(ns->prefix, BAD_CAST prefix));
-        if (match) {
-            xmlFree((void *)ns->href);
-            if (uri_obj == Py_None || uri_obj == NULL) {
-                ns->href = NULL;
-                /* Remove the declaration entirely */
-                /* Unlink from nsDef list */
-                if (self->node->nsDef == ns) {
-                    self->node->nsDef = ns->next;
-                } else {
-                    xmlNsPtr prev = self->node->nsDef;
-                    while (prev && prev->next != ns) prev = prev->next;
-                    if (prev) prev->next = ns->next;
-                }
-                ns->next = NULL;
-                LibXML_forget_ns(self->node, ns);
-                xmlFreeNs(ns);
-            } else {
-                const char *uri = PyUnicode_AsUTF8(uri_obj);
-                if (!uri) return NULL;
-                ns->href = xmlStrdup(BAD_CAST uri);
-            }
-            Py_RETURN_TRUE;
-        }
-        ns = ns->next;
-    }
-    Py_RETURN_FALSE;
+    const char *prefix, *uri;
+    if (!PyArg_ParseTuple(args, "zz", &prefix, &uri)) return NULL;
+    return PyBool_FromLong(set_decl_uri(self->node, prefix, uri));
 }
 
 static PyObject *
 elem_setNamespaceDeclPrefix(LibXML_NodeObject *self, PyObject *args)
 {
-    const char *old_prefix;
-    PyObject *new_prefix_obj;
-    if (!PyArg_ParseTuple(args, "zO", &old_prefix, &new_prefix_obj)) return NULL;
+    const char *old_prefix, *new_prefix;
+    if (!PyArg_ParseTuple(args, "zz", &old_prefix, &new_prefix)) return NULL;
+    if (old_prefix && old_prefix[0] == '\0') old_prefix = NULL;
+    if (new_prefix && new_prefix[0] == '\0') new_prefix = NULL;
 
-    const char *new_prefix = NULL;
-    if (new_prefix_obj != Py_None) {
-        new_prefix = PyUnicode_AsUTF8(new_prefix_obj);
-        if (!new_prefix) return NULL;
-        if (new_prefix[0] == '\0') new_prefix = NULL;
+    if (xmlStrEqual(BAD_CAST old_prefix, BAD_CAST new_prefix)) Py_RETURN_TRUE;
+
+    xmlNsPtr used = xmlSearchNs(self->node->doc, self->node, BAD_CAST new_prefix);
+    if (used != NULL) {
+        PyErr_Format(LibXML_Error, "setNamespaceDeclPrefix: prefix '%s' is in use",
+                     new_prefix ? new_prefix : "");
+        return NULL;
     }
 
-    /* Check new prefix not already in use */
-    if (new_prefix) {
-        xmlNsPtr existing = xmlSearchNs(self->node->doc, self->node,
-                                        BAD_CAST new_prefix);
-        if (existing) {
-            PyErr_Format(LibXML_Error, "prefix '%s' is already in use", new_prefix);
-            return NULL;
-        }
-    } else {
-        /* Trying to set default ns: check if default ns already exists */
-        xmlNsPtr existing = xmlSearchNs(self->node->doc, self->node, NULL);
-        if (existing) {
-            PyErr_SetString(LibXML_Error, "default namespace prefix already in use");
-            return NULL;
-        }
-    }
-
-    /* Find the ns decl with old_prefix */
-    xmlNsPtr ns = self->node->nsDef;
-    while (ns) {
-        int match = (old_prefix == NULL && ns->prefix == NULL) ||
-                    (old_prefix && ns->prefix &&
-                     xmlStrEqual(ns->prefix, BAD_CAST old_prefix));
-        if (match) {
-            xmlFree((void *)ns->prefix);
-            ns->prefix = new_prefix ? xmlStrdup(BAD_CAST new_prefix) : NULL;
-            /* Update ns pointer on element if it used this ns */
-            if (self->node->ns == ns) {
-                /* element's own ns prefix changed */
+    for (xmlNsPtr ns = self->node->nsDef; ns; ns = ns->next) {
+        if ((ns->prefix || ns->href) && xmlStrEqual(ns->prefix, BAD_CAST old_prefix)) {
+            if (ns->href == NULL && new_prefix != NULL) {
+                PyErr_SetString(LibXML_Error,
+                    "setNamespaceDeclPrefix: cannot set non-empty prefix for empty namespace");
+                return NULL;
             }
+            xmlFree((xmlChar *)ns->prefix);
+            ns->prefix = new_prefix ? xmlStrdup(BAD_CAST new_prefix) : NULL;
             Py_RETURN_TRUE;
         }
-        ns = ns->next;
     }
     Py_RETURN_FALSE;
 }
@@ -725,15 +730,6 @@ elem_get_tagName(LibXML_NodeObject *self, void *closure)
             (const char *)self->node->name);
     if (self->node->name)
         return PyUnicode_FromString((const char *)self->node->name);
-    Py_RETURN_NONE;
-}
-
-static PyObject *
-elem_setNodeName(LibXML_NodeObject *self, PyObject *args)
-{
-    const char *name;
-    if (!PyArg_ParseTuple(args, "s", &name)) return NULL;
-    xmlNodeSetName(self->node, BAD_CAST name);
     Py_RETURN_NONE;
 }
 
@@ -781,7 +777,7 @@ static PyMethodDef LibXML_Element_methods[] = {
     {"setAttributeNode",        (PyCFunction)elem_setAttributeNode,        METH_VARARGS, "Set attribute from Attr node"},
     {"setAttributeNodeNS",      (PyCFunction)elem_setAttributeNodeNS,      METH_VARARGS, "Set namespaced attribute from Attr node"},
     {"removeAttributeNode",     (PyCFunction)elem_removeAttributeNode,     METH_VARARGS, "Remove Attr node"},
-    {"setNodeName",             (PyCFunction)elem_setNodeName,             METH_VARARGS, "Rename element"},
+    {"addNewChild",             (PyCFunction)elem_addNewChild,             METH_VARARGS, "Create a child element in a namespace"},
     {"getChildrenByTagName",    (PyCFunction)elem_getChildrenByTagName,    METH_VARARGS, "Get direct child elements by tag"},
     {"getChildrenByTagNameNS",  (PyCFunction)elem_getChildrenByTagNameNS,  METH_VARARGS, "Get direct child elements by NS tag"},
     {"getChildrenByLocalName",  (PyCFunction)elem_getChildrenByLocalName,  METH_VARARGS, "Get direct child elements by local name"},

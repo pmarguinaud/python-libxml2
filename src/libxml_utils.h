@@ -14,6 +14,7 @@
 typedef struct {
     PyObject *wrapper;  /* Python Node wrapper for this node, or NULL */
     PyObject *cargo;    /* User-supplied Python object, or NULL */
+    xmlNodePtr old_dtds;  /* Document only: DTDs that left it, chained by next */
 } LibXML_NodePrivate;
 
 /*
@@ -25,6 +26,9 @@ PyObject *LibXML_Node_Wrap(xmlNodePtr node);
 
 /* New hidden document, for nodes created without one. Returns its wrapper. */
 PyObject *LibXML_new_hidden_doc(void);
+
+/* Check an element or attribute name. Returns 0, or -1 with an exception set. */
+int LibXML_check_name(const char *name);
 
 /* Raise a Python exception from the last libxml2 error */
 void LibXML_raise_last_error(void);

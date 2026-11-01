@@ -82,6 +82,38 @@ LibXML_clear_private(xmlNodePtr top)
     LibXML_walk_tree(top, clear_private_node, NULL);
 }
 
+void
+LibXML_free_tree(xmlNodePtr top)
+{
+    LibXML_clear_private(top);
+
+    if (top->type == XML_DTD_NODE && top->doc && top->doc->_private) {
+        LibXML_NodePrivate *priv = (LibXML_NodePrivate *)top->doc->_private;
+        /* A wrapper can come and go again through an entity reference. */
+        for (xmlNodePtr d = priv->old_dtds; d; d = d->next) {
+            if (d == top)
+                return;
+        }
+        top->next = priv->old_dtds;
+        priv->old_dtds = top;
+        return;
+    }
+    xmlFreeNode(top);
+}
+
+void
+LibXML_free_old_dtds(xmlNodePtr *list)
+{
+    xmlNodePtr dtd = *list;
+    *list = NULL;
+    while (dtd) {
+        xmlNodePtr next = dtd->next;
+        dtd->next = NULL;
+        xmlFreeDtd((xmlDtdPtr)dtd);
+        dtd = next;
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* Keeping namespaces valid                                            */
 /* ------------------------------------------------------------------ */
@@ -165,8 +197,24 @@ remove_ns_decl(xmlNodePtr element, xmlNsPtr ns)
     return 0;
 }
 
+typedef struct {
+    xmlNodePtr top;
+    xmlNsPtr unused;    /* declarations to free after the walk */
+} Reconcile;
+
+/* Drop a redundant declaration. Freed after the walk, because nodes further down
+ * may still point to it. */
 static void
-reconcile_element(xmlNodePtr element, xmlNsPtr *unused)
+drop_ns_decl(xmlNodePtr element, xmlNsPtr ns, Reconcile *rec)
+{
+    if (remove_ns_decl(element, ns)) {
+        ns->next = rec->unused;
+        rec->unused = ns;
+    }
+}
+
+static void
+reconcile_element(xmlNodePtr element, Reconcile *rec)
 {
     xmlNsPtr ns = element->ns;
     if (ns == NULL)
@@ -176,12 +224,7 @@ reconcile_element(xmlNodePtr element, xmlNsPtr *unused)
         ? xmlSearchNs(element->doc, element->parent, ns->prefix) : NULL;
 
     if (inherited != NULL && xmlStrEqual(inherited->href, ns->href)) {
-        /* The declaration is redundant here. Freed after the walk, because
-         * nodes further down may still point to it. */
-        if (remove_ns_decl(element, ns)) {
-            ns->next = *unused;
-            *unused = ns;
-        }
+        drop_ns_decl(element, ns, rec);
         element->ns = inherited;
     } else {
         element->ns = declare_ns(element, ns);
@@ -189,7 +232,7 @@ reconcile_element(xmlNodePtr element, xmlNsPtr *unused)
 }
 
 static void
-reconcile_attr(xmlAttrPtr attr)
+reconcile_attr(xmlAttrPtr attr, Reconcile *rec)
 {
     xmlNsPtr ns = attr->ns;
     xmlNodePtr element = attr->parent;
@@ -203,28 +246,39 @@ reconcile_attr(xmlAttrPtr attr)
     }
 
     xmlNsPtr visible = xmlSearchNs(attr->doc, element, ns->prefix);
-    if (visible != NULL && xmlStrEqual(visible->href, ns->href))
-        attr->ns = visible;
-    else
+    if (visible == NULL || !xmlStrEqual(visible->href, ns->href)) {
         attr->ns = declare_ns(element, ns);
+        return;
+    }
+
+    /* A declaration can only go if the walk covers all the nodes that use it. */
+    xmlNsPtr inherited = element->parent
+        ? xmlSearchNs(attr->doc, element->parent, ns->prefix) : NULL;
+    if (rec->top != (xmlNodePtr)attr && inherited != NULL
+        && xmlStrEqual(inherited->href, ns->href)) {
+        drop_ns_decl(element, visible, rec);
+        attr->ns = inherited;
+    } else {
+        attr->ns = visible;
+    }
 }
 
 static void
 reconcile_node(xmlNodePtr node, void *arg)
 {
     if (node->type == XML_ELEMENT_NODE)
-        reconcile_element(node, (xmlNsPtr *)arg);
+        reconcile_element(node, (Reconcile *)arg);
     else if (node->type == XML_ATTRIBUTE_NODE)
-        reconcile_attr((xmlAttrPtr)node);
+        reconcile_attr((xmlAttrPtr)node, (Reconcile *)arg);
 }
 
 static void
 reconcile_ns(xmlNodePtr node)
 {
-    xmlNsPtr unused = NULL;
-    LibXML_walk_tree(node, reconcile_node, &unused);
-    if (unused != NULL)
-        xmlFreeNsList(unused);
+    Reconcile rec = { node, NULL };
+    LibXML_walk_tree(node, reconcile_node, &rec);
+    if (rec.unused != NULL)
+        xmlFreeNsList(rec.unused);
 }
 
 static void
@@ -295,9 +349,24 @@ LibXML_fix_owner(xmlNodePtr node)
     Py_XDECREF(fix.doc_obj);
 }
 
+/* The content of an entity is shared by all its references, and a reference
+ * placed inside it would make the entity contain itself. */
+static int
+inside_entity(xmlNodePtr node)
+{
+    for (; node; node = node->parent) {
+        if (node->type == XML_ENTITY_DECL)
+            return 1;
+    }
+    return 0;
+}
+
 int
 LibXML_check_detach(xmlNodePtr node)
 {
+    if (inside_entity(node))
+        return hierarchy_error("the content of an entity cannot be changed");
+
     switch (node->type) {
     case XML_DOCUMENT_NODE:
     case XML_HTML_DOCUMENT_NODE:
@@ -352,8 +421,7 @@ LibXML_release_node(xmlNodePtr node)
         LibXML_fix_owner(node);
         Py_XDECREF(root);
     } else {
-        LibXML_clear_private(node);
-        xmlFreeNode(node);
+        LibXML_free_tree(node);
     }
 }
 
@@ -473,7 +541,12 @@ check_insert(xmlNodePtr node, xmlNodePtr parent, xmlNodePtr before, int new_root
     for (xmlNodePtr p = parent; p; p = p->parent) {
         if (p == node)
             return hierarchy_error("a node cannot be inserted into itself");
+        if (p->type == XML_ENTITY_DECL)
+            return hierarchy_error("the content of an entity cannot be changed");
     }
+
+    if (inside_entity(node))
+        return hierarchy_error("the content of an entity cannot be changed");
 
     if (before != NULL
         && (before->parent != parent || before->type == XML_ATTRIBUTE_NODE))
@@ -546,9 +619,8 @@ move_node(xmlNodePtr node, xmlNodePtr parent, xmlNodePtr before)
     return 0;
 }
 
-/* Find an attribute of element with the same name and namespace as attr. */
-static xmlAttrPtr
-find_same_attr(xmlNodePtr element, xmlAttrPtr attr)
+xmlAttrPtr
+LibXML_find_same_attr(xmlNodePtr element, xmlAttrPtr attr)
 {
     const xmlChar *href = attr->ns ? attr->ns->href : NULL;
 
@@ -565,6 +637,8 @@ attach_attr(xmlAttrPtr attr, xmlNodePtr element)
 {
     if (element->type != XML_ELEMENT_NODE)
         return hierarchy_error("only an element can hold an attribute");
+    if (inside_entity(element) || inside_entity((xmlNodePtr)attr))
+        return hierarchy_error("the content of an entity cannot be changed");
 
     if (attr->parent == element)
         return 0;
@@ -573,7 +647,7 @@ attach_attr(xmlAttrPtr attr, xmlNodePtr element)
     if (adopt_unlinked((xmlNodePtr)attr, element->doc, element) < 0)
         return -1;
 
-    xmlAttrPtr same = find_same_attr(element, attr);
+    xmlAttrPtr same = LibXML_find_same_attr(element, attr);
     if (same != NULL)
         LibXML_release_node((xmlNodePtr)same);
 
@@ -748,6 +822,8 @@ LibXML_adopt_node(xmlNodePtr node, xmlDocPtr doc)
     default:
         return hierarchy_error("this node type cannot be adopted");
     }
+    if (LibXML_check_detach(node) < 0)
+        return -1;
 
     xmlUnlinkNode(node);
 

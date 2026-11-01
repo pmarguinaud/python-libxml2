@@ -33,6 +33,13 @@ xmlNodePtr LibXML_tree_top(xmlNodePtr node);
 /* Free the private struct, and the cargo, of each node of a dead tree. */
 void LibXML_clear_private(xmlNodePtr top);
 
+/* Free a tree nothing refers to any more. A DTD waits for its document: entity
+ * references keep pointing to its declarations. */
+void LibXML_free_tree(xmlNodePtr top);
+
+/* Free the DTDs that have left doc. */
+void LibXML_free_old_dtds(xmlNodePtr *list);
+
 /* Update the wrappers of the subtree at node after it moved. */
 void LibXML_fix_owner(xmlNodePtr node);
 
@@ -64,6 +71,9 @@ int LibXML_check_detach(xmlNodePtr node);
 
 /* Check that node holds a list of children that can be changed. */
 int LibXML_check_children(xmlNodePtr node);
+
+/* The attribute of element with the same name and namespace as attr, if any. */
+xmlAttrPtr LibXML_find_same_attr(xmlNodePtr element, xmlAttrPtr attr);
 
 /* A namespace owned by doc, for attributes without an element to declare it. */
 xmlNsPtr LibXML_doc_ns(xmlDocPtr doc, const xmlChar *href, const xmlChar *prefix);
