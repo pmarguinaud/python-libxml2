@@ -251,13 +251,13 @@ static PyMethodDef chardata_methods[] = {
 typedef xmlNodePtr (*make_node_fn)(xmlDocPtr doc, const char *a, const char *b);
 
 static PyObject *
-new_standalone(make_node_fn make_node, const char *a, const char *b)
+new_standalone(PyTypeObject *type, make_node_fn make_node, const char *a, const char *b)
 {
     PyObject *doc = LibXML_new_hidden_doc();
     if (doc == NULL) return NULL;
 
     xmlNodePtr node = make_node((xmlDocPtr)LibXML_NODE(doc), a, b);
-    PyObject *result = node ? LibXML_Node_Wrap(node) : PyErr_NoMemory();
+    PyObject *result = node ? LibXML_Node_Wrap_As(node, type) : PyErr_NoMemory();
     if (node && !result) xmlFreeNode(node);
     Py_DECREF(doc);
     return result;
@@ -291,32 +291,36 @@ static PyObject *
 LibXML_Text_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 {
     const char *content = "";
-    if (!PyArg_ParseTuple(args, "|s", &content)) return NULL;
-    return new_standalone(make_text, content, NULL);
+    static char *kwlist[] = {"content", NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|s", kwlist, &content)) return NULL;
+    return new_standalone(type, make_text, content, NULL);
 }
 
 static PyObject *
 LibXML_Comment_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 {
     const char *content = "";
-    if (!PyArg_ParseTuple(args, "|s", &content)) return NULL;
-    return new_standalone(make_comment, content, NULL);
+    static char *kwlist[] = {"content", NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|s", kwlist, &content)) return NULL;
+    return new_standalone(type, make_comment, content, NULL);
 }
 
 static PyObject *
 LibXML_CDATASection_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 {
     const char *content = "";
-    if (!PyArg_ParseTuple(args, "|s", &content)) return NULL;
-    return new_standalone(make_cdata, content, NULL);
+    static char *kwlist[] = {"content", NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|s", kwlist, &content)) return NULL;
+    return new_standalone(type, make_cdata, content, NULL);
 }
 
 static PyObject *
 LibXML_PI_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 {
     const char *target, *data = NULL;
-    if (!PyArg_ParseTuple(args, "s|s", &target, &data)) return NULL;
-    return new_standalone(make_pi, target, data);
+    static char *kwlist[] = {"target", "data", NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "s|s", kwlist, &target, &data)) return NULL;
+    return new_standalone(type, make_pi, target, data);
 }
 
 /* PI-specific methods */

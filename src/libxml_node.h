@@ -35,5 +35,6 @@ int LibXML_node_name_is(xmlNodePtr node, const char *name);
 
 /* GC helper (shared with subtypes) */
 int LibXML_Node_traverse(LibXML_NodeObject *self, visitproc visit, void *arg);
+int LibXML_Node_clear(LibXML_NodeObject *self);
 
 #endif /* LIBXML_NODE_H */

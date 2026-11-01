@@ -95,7 +95,7 @@ LibXML_Element_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
     if (ns_uri)
         xmlSetNs(node, xmlNewNs(node, BAD_CAST ns_uri, NULL));
 
-    PyObject *result = LibXML_Node_Wrap(node);
+    PyObject *result = LibXML_Node_Wrap_As(node, type);
     if (result == NULL) xmlFreeNode(node);
     Py_DECREF(doc);
     return result;
@@ -362,6 +362,7 @@ elem_removeAttribute(LibXML_NodeObject *self, PyObject *args)
     if (!PyArg_ParseTuple(args, "s", &name)) return NULL;
     xmlAttrPtr attr = get_attr_node(self->node, name);
     if (attr == NULL) Py_RETURN_FALSE;
+    if (LibXML_check_attr_stays() < 0) return NULL;
     LibXML_release_node((xmlNodePtr)attr);
     Py_RETURN_TRUE;
 }
@@ -384,6 +385,7 @@ elem_removeAttributeNS(LibXML_NodeObject *self, PyObject *args)
             int match = (!ns_uri && !prop_ns) ||
                         (ns_uri && prop_ns && strcmp(ns_uri, prop_ns) == 0);
             if (match) {
+                if (LibXML_check_attr_stays() < 0) return NULL;
                 LibXML_release_node((xmlNodePtr)prop);
                 Py_RETURN_TRUE;
             }
@@ -742,6 +744,7 @@ elem_removeAttributeNode(LibXML_NodeObject *self, PyObject *args)
         PyErr_SetString(LibXML_Error, "not an attribute of this element");
         return NULL;
     }
+    if (LibXML_check_attr_stays() < 0) return NULL;
     LibXML_detach_node(attr->node);
     Py_INCREF(attr);
     return (PyObject *)attr;

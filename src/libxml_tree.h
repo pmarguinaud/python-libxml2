@@ -33,9 +33,20 @@ xmlNodePtr LibXML_tree_top(xmlNodePtr node);
 /* Free the private struct, and the cargo, of each node of a dead tree. */
 void LibXML_clear_private(xmlNodePtr top);
 
+/* Cargo is reached from the wrapper at the root of a tree, for the garbage
+ * collector: a wrapper alone cannot tell if its node is still in use. */
+extern long LibXML_cargo_count;
+int LibXML_traverse_cargo(xmlNodePtr top, visitproc visit, void *arg);
+void LibXML_clear_cargo(xmlNodePtr top);
+
 /* Free a tree nothing refers to any more. A DTD waits for its document: entity
  * references keep pointing to its declarations. */
 void LibXML_free_tree(xmlNodePtr top);
+
+/* A callback can change the tree while libxml2 walks a node set. So while an
+ * evaluation runs, trees are not freed, and the last one to end frees them. */
+void LibXML_eval_begin(void);
+void LibXML_eval_end(void);
 
 /* Free the DTDs that have left doc. */
 void LibXML_free_old_dtds(xmlNodePtr *list);
@@ -68,6 +79,10 @@ void LibXML_detach_node(xmlNodePtr node);
 
 /* Check that node can leave its tree. Returns 0, or -1 with an exception set. */
 int LibXML_check_detach(xmlNodePtr node);
+
+/* libxml2 reads the parent of every attribute when it sorts a node set, so an
+ * attribute cannot lose its element during an evaluation. */
+int LibXML_check_attr_stays(void);
 
 /* Check that node holds a list of children that can be changed. */
 int LibXML_check_children(xmlNodePtr node);

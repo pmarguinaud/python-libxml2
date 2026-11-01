@@ -12,6 +12,10 @@ from xml_libxml._libxml import (
     Namespace,
     NodeList,
     XPathContext,
+    XPathExpression,
+    Literal,
+    Number,
+    Boolean,
     DocumentFragment,
 
     # Exception
@@ -64,7 +68,8 @@ def load_html(*args, **options):
 __version__ = '0.1.0'
 __all__ = [
     'Parser', 'Document', 'Node', 'Element', 'Text', 'Comment',
-    'CDATASection', 'PI', 'Attr', 'Namespace', 'NodeList', 'XPathContext', 'DocumentFragment',
+    'CDATASection', 'PI', 'Attr', 'Namespace', 'NodeList', 'XPathContext', 'XPathExpression',
+    'Literal', 'Number', 'Boolean', 'DocumentFragment',
     'Error', 'ErrNo', 'load_xml', 'load_html',
     'XML_ELEMENT_NODE', 'XML_ATTRIBUTE_NODE', 'XML_TEXT_NODE',
     'XML_CDATA_SECTION_NODE', 'XML_ENTITY_REF_NODE', 'XML_ENTITY_NODE',

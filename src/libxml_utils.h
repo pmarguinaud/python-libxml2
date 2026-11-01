@@ -24,6 +24,9 @@ typedef struct {
  */
 PyObject *LibXML_Node_Wrap(xmlNodePtr node);
 
+/* Same, with a wrapper of this type, for constructors called on a subclass. */
+PyObject *LibXML_Node_Wrap_As(xmlNodePtr node, PyTypeObject *type);
+
 /* New hidden document, for nodes created without one. Returns its wrapper. */
 PyObject *LibXML_new_hidden_doc(void);
 

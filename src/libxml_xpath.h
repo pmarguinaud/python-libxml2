@@ -2,30 +2,39 @@
 #define LIBXML_XPATH_H
 
 #include "libxml_module.h"
+#include "libxml_node.h"
 
 typedef struct {
     PyObject_HEAD
-    xmlXPathContextPtr ctx;      /* the libxml2 XPath context (may be NULL) */
-    PyObject          *doc_obj;  /* strong ref to Document, keeps it alive */
-    PyObject          *ns_dict;  /* Python dict {prefix: uri} for pending/current ns */
+    xmlXPathContextPtr ctx;
+    PyObject *node;         /* the context node, kept alive; NULL if none */
+    PyObject *functions;    /* {(name, uri): callable} */
+    PyObject *var_func;     /* variable lookup function, or NULL */
+    PyObject *var_data;     /* its first argument */
+    PyObject *pool;         /* what results of callbacks need until the end */
+    int depth;              /* evaluations running, as callbacks can start some */
 } LibXML_XPathContextObject;
 
 extern PyTypeObject LibXML_XPathContextType;
+extern PyTypeObject LibXML_XPathExpressionType;
 
-/*
- * Evaluate an XPath expression on ctx with optional context node.
- * Returns the raw xmlXPathObjectPtr; caller must xmlXPathFreeObject().
- * On error, sets a Python exception and returns NULL.
- */
-xmlXPathObjectPtr LibXML_xpath_eval(xmlXPathContextPtr ctx, const char *expr);
+/* What an evaluation gives back */
+typedef enum {
+    LIBXML_XP_NODES,    /* a NodeList, empty if the result is no node set */
+    LIBXML_XP_FIND,     /* the result as NodeList, Literal, Number or Boolean */
+    LIBXML_XP_VALUE,    /* the result as a string */
+    LIBXML_XP_EXISTS,   /* the result as a bool */
+    LIBXML_XP_BOOL      /* the result as a Boolean */
+} LibXML_XPathMode;
 
-/*
- * Convert an xmlXPathObjectPtr to a Python object:
- *   nodeset → LibXML_NodeListObject
- *   boolean → PyBool
- *   number  → PyFloat
- *   string  → PyUnicode
- */
-PyObject *LibXML_xpath_to_python(xmlXPathObjectPtr xobj);
+/* Evaluate expr, a str or XPathExpression, with node as context. */
+PyObject *LibXML_node_xpath(LibXML_NodeObject *node, PyObject *expr, LibXML_XPathMode mode);
+
+/* Make a Literal, Number from text. Takes no reference. */
+PyObject *LibXML_new_literal(PyObject *text);
+PyObject *LibXML_new_number(PyObject *text);
+
+/* Load the classes of _xpath.py and add them to the module. */
+int LibXML_xpath_init(PyObject *module);
 
 #endif /* LIBXML_XPATH_H */

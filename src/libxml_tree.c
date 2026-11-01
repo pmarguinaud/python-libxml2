@@ -64,6 +64,8 @@ find_wrapper(xmlNodePtr node, void *arg)
         *(int *)arg = 1;
 }
 
+long LibXML_cargo_count = 0;
+
 static void
 clear_private_node(xmlNodePtr node, void *arg)
 {
@@ -72,8 +74,57 @@ clear_private_node(xmlNodePtr node, void *arg)
     if (priv == NULL)
         return;
     node->_private = NULL;
-    Py_XDECREF(priv->cargo);
+    if (priv->cargo != NULL) {
+        LibXML_cargo_count--;
+        Py_DECREF(priv->cargo);
+    }
     free(priv);
+}
+
+typedef struct {
+    visitproc visit;
+    void *arg;
+    int result;
+} CargoVisit;
+
+static void
+traverse_cargo_node(xmlNodePtr node, void *arg)
+{
+    CargoVisit *cv = (CargoVisit *)arg;
+    LibXML_NodePrivate *priv = (LibXML_NodePrivate *)node->_private;
+    if (cv->result == 0 && priv != NULL && priv->cargo != NULL)
+        cv->result = cv->visit(priv->cargo, cv->arg);
+}
+
+int
+LibXML_traverse_cargo(xmlNodePtr top, visitproc visit, void *arg)
+{
+    CargoVisit cv = { visit, arg, 0 };
+    if (LibXML_cargo_count > 0)
+        LibXML_walk_tree(top, traverse_cargo_node, &cv);
+    return cv.result;
+}
+
+static void
+clear_cargo_node(xmlNodePtr node, void *arg)
+{
+    LibXML_NodePrivate *priv = (LibXML_NodePrivate *)node->_private;
+    if (priv != NULL && priv->cargo != NULL) {
+        PyList_Append((PyObject *)arg, priv->cargo);
+        Py_CLEAR(priv->cargo);
+        LibXML_cargo_count--;
+    }
+}
+
+void
+LibXML_clear_cargo(xmlNodePtr top)
+{
+    /* Dropped after the walk: this can run any destructor. */
+    PyObject *cargo = PyList_New(0);
+    if (cargo != NULL) {
+        LibXML_walk_tree(top, clear_cargo_node, cargo);
+        Py_DECREF(cargo);
+    }
 }
 
 void
@@ -82,9 +133,71 @@ LibXML_clear_private(xmlNodePtr top)
     LibXML_walk_tree(top, clear_private_node, NULL);
 }
 
+typedef struct DeferredTree {
+    xmlNodePtr top;
+    PyObject *doc;      /* the tree needs its document */
+    struct DeferredTree *next;
+} DeferredTree;
+
+static int evals_running = 0;
+static DeferredTree *deferred = NULL;
+
+static void
+defer_tree(xmlNodePtr top)
+{
+    for (DeferredTree *d = deferred; d; d = d->next) {
+        if (d->top == top)
+            return;
+    }
+    DeferredTree *entry = (DeferredTree *)malloc(sizeof(DeferredTree));
+    PyObject *doc = LibXML_Node_Wrap((xmlNodePtr)top->doc);
+    if (entry == NULL || doc == NULL) {
+        /* Better a leak than a tree that libxml2 may still read. */
+        PyErr_Clear();
+        Py_XDECREF(doc);
+        free(entry);
+        return;
+    }
+    entry->top = top;
+    entry->doc = doc;
+    entry->next = deferred;
+    deferred = entry;
+}
+
+void
+LibXML_eval_begin(void)
+{
+    evals_running++;
+}
+
+void
+LibXML_eval_end(void)
+{
+    if (--evals_running > 0)
+        return;
+
+    while (deferred != NULL) {
+        DeferredTree *entry = deferred;
+        int has_wrapper = 0;
+
+        deferred = entry->next;
+        /* The result of the evaluation may have made it a tree in use. */
+        LibXML_walk_tree(entry->top, find_wrapper, &has_wrapper);
+        if (!has_wrapper)
+            LibXML_free_tree(entry->top);
+        Py_DECREF(entry->doc);
+        free(entry);
+    }
+}
+
 void
 LibXML_free_tree(xmlNodePtr top)
 {
+    if (evals_running > 0 && top->type != XML_DTD_NODE) {
+        defer_tree(top);
+        return;
+    }
+
     LibXML_clear_private(top);
 
     if (top->type == XML_DTD_NODE && top->doc && top->doc->_private) {
@@ -362,10 +475,21 @@ inside_entity(xmlNodePtr node)
 }
 
 int
+LibXML_check_attr_stays(void)
+{
+    if (evals_running > 0)
+        return hierarchy_error("an attribute cannot leave its element during an "
+                               "XPath evaluation");
+    return 0;
+}
+
+int
 LibXML_check_detach(xmlNodePtr node)
 {
     if (inside_entity(node))
         return hierarchy_error("the content of an entity cannot be changed");
+    if (node->type == XML_ATTRIBUTE_NODE && LibXML_check_attr_stays() < 0)
+        return -1;
 
     switch (node->type) {
     case XML_DOCUMENT_NODE:
@@ -441,11 +565,13 @@ protect_attr_children(xmlAttrPtr attr)
         int has_wrapper = 0;
 
         LibXML_walk_tree(child, find_wrapper, &has_wrapper);
-        if (has_wrapper) {
+        if (has_wrapper || evals_running > 0) {
             xmlNodePtr copy = xmlDocCopyNode(child, child->doc, 1);
             if (copy != NULL && xmlReplaceNode(child, copy) != NULL) {
                 reconcile_ns(child);
                 LibXML_fix_owner(child);
+                if (!has_wrapper)
+                    LibXML_free_tree(child);
             }
         } else {
             LibXML_clear_private(child);
@@ -642,6 +768,8 @@ attach_attr(xmlAttrPtr attr, xmlNodePtr element)
 
     if (attr->parent == element)
         return 0;
+    if (LibXML_check_attr_stays() < 0)
+        return -1;
 
     xmlUnlinkNode((xmlNodePtr)attr);
     if (adopt_unlinked((xmlNodePtr)attr, element->doc, element) < 0)
@@ -702,6 +830,8 @@ replace_attr(xmlAttrPtr old_attr, xmlAttrPtr new_attr)
 
     if (new_attr == old_attr)
         return 0;
+    if (LibXML_check_attr_stays() < 0)
+        return -1;
 
     xmlUnlinkNode((xmlNodePtr)new_attr);
     if (adopt_unlinked((xmlNodePtr)new_attr, element->doc, element) < 0)

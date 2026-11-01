@@ -59,7 +59,7 @@ LibXML_Document_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
         doc->encoding = xmlStrdup(BAD_CAST encoding);
     }
 
-    return LibXML_Node_Wrap((xmlNodePtr)doc);
+    return LibXML_Node_Wrap_As((xmlNodePtr)doc, type);
 }
 
 /* ------------------------------------------------------------------ */
@@ -445,6 +445,16 @@ doc_toString(LibXML_NodeObject *self, PyObject *args, PyObject *kwds)
 }
 
 static PyObject *
+doc_str(LibXML_NodeObject *self)
+{
+    PyObject *args = PyTuple_New(0);
+    if (args == NULL) return NULL;
+    PyObject *result = doc_toString(self, args, NULL);
+    Py_DECREF(args);
+    return result;
+}
+
+static PyObject *
 doc_toStringHTML(LibXML_NodeObject *self, PyObject *args)
 {
     xmlChar *buf = NULL;
@@ -732,6 +742,7 @@ PyTypeObject LibXML_DocumentType = {
     .tp_name      = "xml_libxml.Document",
     .tp_basicsize = sizeof(LibXML_NodeObject),
     .tp_dealloc   = (destructor)LibXML_Document_dealloc,
+    .tp_str       = (reprfunc)doc_str,
     .tp_flags     = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
     .tp_base      = &LibXML_NodeType,
     .tp_new       = LibXML_Document_new,

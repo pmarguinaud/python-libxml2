@@ -172,8 +172,34 @@ def op_forget():
     gc.collect()
 
 
+def op_xpath_callback():
+    d = pick_doc()
+    x = X.XPathContext(d)
+    target = pick()
+
+    def meddle(*args):
+        rng.choice([
+            lambda: target.unbindNode(),
+            lambda: target.removeChildNodes(),
+            lambda: setattr(target, 'textContent', 'changed'),
+            lambda: target.setAttribute('x', 'changed'),
+            lambda: target.normalize(),
+            lambda: d.adoptNode(target),
+            lambda: remember(d.createElement('during')),
+            lambda: pool.pop() if pool else None,
+            lambda: gc.collect(),
+        ])()
+        return rng.choice([True, 1, 'text', d.findnodes('//*')])
+
+    x.registerFunction('meddle', meddle)
+    x.registerVarLookupFunc(lambda data, name, uri: meddle())
+    for hit in x.findnodes(rng.choice(['//*[meddle()]', '//text()[meddle()]',
+                                       '//@*[meddle()]', '//*[$v]', 'meddle()'])):
+        remember(hit)
+
+
 OPS = [op_grab, op_create, op_fragment, op_move, op_move, op_move,
-       op_documents, op_content, op_content, op_forget]
+       op_documents, op_content, op_content, op_forget, op_xpath_callback]
 
 for doc in docs:
     remember(doc.documentElement)

@@ -26,7 +26,7 @@ LibXML_Attr_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
     }
     LibXML_set_text((xmlNodePtr)attr, value);
 
-    PyObject *result = LibXML_Node_Wrap((xmlNodePtr)attr);
+    PyObject *result = LibXML_Node_Wrap_As((xmlNodePtr)attr, type);
     if (result == NULL) xmlFreeNode((xmlNodePtr)attr);
     Py_DECREF(doc);
     return result;

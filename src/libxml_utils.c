@@ -238,6 +238,12 @@ wrapper_type(xmlNodePtr node)
 PyObject *
 LibXML_Node_Wrap(xmlNodePtr node)
 {
+    return LibXML_Node_Wrap_As(node, NULL);
+}
+
+PyObject *
+LibXML_Node_Wrap_As(xmlNodePtr node, PyTypeObject *type)
+{
     if (node == NULL) Py_RETURN_NONE;
 
     if (node->type == XML_NAMESPACE_DECL) {
@@ -268,7 +274,8 @@ LibXML_Node_Wrap(xmlNodePtr node)
         }
     }
 
-    PyTypeObject *type = wrapper_type(node);
+    if (type == NULL)
+        type = wrapper_type(node);
     LibXML_NodeObject *self = (LibXML_NodeObject *)type->tp_alloc(type, 0);
     if (self == NULL) {
         Py_XDECREF(doc_obj);

@@ -33,9 +33,8 @@ PyInit__libxml(void)
     if (PyType_Ready(&LibXML_PIType) < 0) return NULL;
     if (PyType_Ready(&LibXML_AttrType) < 0) return NULL;
     if (PyType_Ready(&LibXML_NamespaceType) < 0) return NULL;
-    if (PyType_Ready(&LibXML_NodeListType) < 0) return NULL;
-    if (LibXML_NodeList_Init() < 0) return NULL;
     if (PyType_Ready(&LibXML_XPathContextType) < 0) return NULL;
+    if (PyType_Ready(&LibXML_XPathExpressionType) < 0) return NULL;
     if (PyType_Ready(&LibXML_ParserType) < 0) return NULL;
 
     static struct PyModuleDef moduledef = {
@@ -73,11 +72,13 @@ PyInit__libxml(void)
     ADD_TYPE("PI",               LibXML_PIType)
     ADD_TYPE("Attr",             LibXML_AttrType)
     ADD_TYPE("Namespace",        LibXML_NamespaceType)
-    ADD_TYPE("NodeList",         LibXML_NodeListType)
     ADD_TYPE("XPathContext",     LibXML_XPathContextType)
+    ADD_TYPE("XPathExpression",  LibXML_XPathExpressionType)
     ADD_TYPE("Parser",           LibXML_ParserType)
 
 #undef ADD_TYPE
+
+    if (LibXML_xpath_init(m) < 0) { Py_DECREF(m); return NULL; }
 
     /* Node type constants */
 #define ADD_INT(name, val) \
