@@ -265,6 +265,7 @@ xpc_eval(LibXML_XPathContextObject *self, const char *expr)
         PyErr_SetString(LibXML_Error, "XPathContext has no context node");
         return NULL;
     }
+    LibXML_errors_begin();
     xmlXPathObjectPtr xobj = xmlXPathEvalExpression(BAD_CAST expr, self->ctx);
     if (!xobj) {
         LibXML_raise_last_error();

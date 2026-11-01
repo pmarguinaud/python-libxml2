@@ -6,30 +6,203 @@
 #include "libxml_attr.h"
 #include "libxml_text.h"
 
-/* Thread-local last error storage */
-static xmlError last_error;
-static int      last_error_set = 0;
+/* ------------------------------------------------------------------ */
+/* Errors                                                              */
+/* ------------------------------------------------------------------ */
+
+#define ERRORS_KEY "xml_libxml.errors"
+
+static PyObject *error_module = NULL;
+
+int
+LibXML_errors_init(void)
+{
+    error_module = PyImport_ImportModule("xml_libxml._error");
+    if (error_module == NULL) return -1;
+    LibXML_Error = PyObject_GetAttrString(error_module, "Error");
+    if (LibXML_Error == NULL) return -1;
+    return 0;
+}
+
+/* The list of this thread. Returns a borrowed reference. */
+static PyObject *
+thread_errors(void)
+{
+    PyObject *dict = PyThreadState_GetDict();
+    if (dict == NULL) return NULL;
+    PyObject *list = PyDict_GetItemString(dict, ERRORS_KEY);
+    if (list == NULL) {
+        list = PyList_New(0);
+        if (list == NULL || PyDict_SetItemString(dict, ERRORS_KEY, list) < 0) {
+            Py_XDECREF(list);
+            return NULL;
+        }
+        Py_DECREF(list);
+    }
+    return list;
+}
+
+void
+LibXML_errors_begin(void)
+{
+    /* libxml2 keeps the handler per thread. */
+    xmlSetStructuredErrorFunc(NULL, LibXML_error_handler);
+
+    PyObject *list = thread_errors();
+    if (list != NULL && PyList_GET_SIZE(list) > 0)
+        PyList_SetSlice(list, 0, PyList_GET_SIZE(list), NULL);
+}
+
+static void
+record_string(PyObject *record, const char *key, const char *value)
+{
+    if (value == NULL) return;
+    PyObject *text = PyUnicode_DecodeUTF8(value, (Py_ssize_t)strlen(value), "replace");
+    if (text != NULL) {
+        PyDict_SetItemString(record, key, text);
+        Py_DECREF(text);
+    }
+}
+
+static void
+record_int(PyObject *record, const char *key, long value)
+{
+    PyObject *number = PyLong_FromLong(value);
+    if (number != NULL) {
+        PyDict_SetItemString(record, key, number);
+        Py_DECREF(number);
+    }
+}
+
+/* The line of the input where a parser error is, and the column in it. */
+static void
+record_context(PyObject *record, LIBXML_CONST_ERROR xmlError *error)
+{
+    switch (error->domain) {
+    case XML_FROM_PARSER:
+    case XML_FROM_HTML:
+    case XML_FROM_DTD:
+    case XML_FROM_NAMESPACE:
+    case XML_FROM_IO:
+    case XML_FROM_VALID:
+        break;
+    default:
+        return;
+    }
+
+    xmlParserCtxtPtr ctxt = (xmlParserCtxtPtr)error->ctxt;
+    if (ctxt == NULL) return;
+
+    xmlParserInputPtr input = ctxt->input;
+    if (input != NULL && input->filename == NULL && ctxt->inputNr > 1)
+        input = ctxt->inputTab[ctxt->inputNr - 2];
+    if (input == NULL || input->cur == NULL || input->base == NULL) return;
+
+    const xmlChar *base = input->base, *cur = input->cur;
+    char content[81];
+    size_t n = 0;
+
+    while (cur > base && (*cur == '\n' || *cur == '\r')) cur--;
+
+    while (n++ < sizeof(content) - 1 && cur > base && *cur != '\n' && *cur != '\r')
+        cur--;
+
+    const xmlChar *line = cur;
+    while (line > base && *line != '\n' && *line != '\r') line--;
+    if (*cur == '\n' || *cur == '\r') cur++;
+    if (*line == '\n' || *line == '\r') line++;
+
+    n = 0;
+    while (*cur != 0 && *cur != '\n' && *cur != '\r' && n < sizeof(content) - 1)
+        content[n++] = (char)*cur++;
+    content[n] = 0;
+
+    record_string(record, "context", content);
+    record_int(record, "column", (long)(input->cur - line));
+}
 
 void
 LibXML_error_handler(void *ctx, LIBXML_CONST_ERROR xmlError *error)
 {
     (void)ctx;
-    xmlResetError(&last_error);
-    xmlCopyError(error, &last_error);
-    last_error_set = 1;
+
+    /* A Python exception may be pending: a callback failed during the parse. */
+    PyObject *type, *value, *tb;
+    PyErr_Fetch(&type, &value, &tb);
+
+    PyObject *list = thread_errors();
+    PyObject *record = list ? PyDict_New() : NULL;
+    if (record != NULL) {
+        record_int(record, "domain", error->domain);
+        record_int(record, "level", error->level);
+        record_int(record, "code", error->code);
+        record_int(record, "line", error->line);
+        record_int(record, "num1", error->int1);
+        record_int(record, "num2", error->int2);
+        record_string(record, "message", error->message);
+        record_string(record, "file", error->file);
+        record_string(record, "str1", error->str1);
+        record_string(record, "str2", error->str2);
+        record_string(record, "str3", error->str3);
+        record_context(record, error);
+        PyList_Append(list, record);
+        Py_DECREF(record);
+    }
+
+    PyErr_Clear();
+    PyErr_Restore(type, value, tb);
+}
+
+/* Returns the chain of errors, Py_None, or NULL. Empties the list. */
+static PyObject *
+take_errors(void)
+{
+    PyObject *list = thread_errors();
+    if (list == NULL || PyList_GET_SIZE(list) == 0)
+        Py_RETURN_NONE;
+
+    PyObject *chain = PyObject_CallMethod(error_module, "_chain", "O", list);
+    PyList_SetSlice(list, 0, PyList_GET_SIZE(list), NULL);
+    return chain;
+}
+
+int
+LibXML_report_errors(int recover)
+{
+    PyObject *chain = take_errors();
+    if (chain == NULL) return -1;
+    if (chain == Py_None || recover == 2) {
+        Py_DECREF(chain);
+        return 0;
+    }
+
+    int rc = 0;
+    if (recover == 0) {
+        PyErr_SetObject(LibXML_Error, chain);
+        rc = -1;
+    } else {
+        PyObject *text = PyObject_Str(chain);
+        if (text != NULL) {
+            rc = PyErr_WarnEx(PyExc_RuntimeWarning, PyUnicode_AsUTF8(text), 1);
+            Py_DECREF(text);
+        } else {
+            rc = -1;
+        }
+    }
+    Py_DECREF(chain);
+    return rc;
 }
 
 void
 LibXML_raise_last_error(void)
 {
-    if (last_error_set && last_error.message) {
-        PyErr_Format(LibXML_Error, "%s", last_error.message);
-        xmlResetError(&last_error);
-        last_error_set = 0;
-    } else {
+    if (LibXML_report_errors(0) == 0)
         PyErr_SetString(LibXML_Error, "libxml2 error");
-    }
 }
+
+/* ------------------------------------------------------------------ */
+/* Names                                                               */
+/* ------------------------------------------------------------------ */
 
 int
 LibXML_check_name(const char *name)

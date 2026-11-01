@@ -5,26 +5,14 @@
 
 typedef struct {
     PyObject_HEAD
-    int recover;
-    int no_blanks;
-    int expand_entities;
-    int load_ext_dtd;
-    int validation;
-    int no_network;
-    int no_cdata;
-    int huge;
-    int pedantic;
-    int suppress_errors;
-    int suppress_warnings;
-    int line_numbers;
+    int flags;          /* XML_PARSE_* options */
+    int recover;        /* 0: errors raise, 1: warn, 2: silent */
+    PyObject *extra;    /* line_numbers, base_uri, gdome, ext_ent_handler */
 } LibXML_ParserObject;
 
 extern PyTypeObject LibXML_ParserType;
 
-/* Build libxml2 parser options int from a ParserObject */
-int LibXML_parser_options(LibXML_ParserObject *self);
-
 /* Parse a well-balanced chunk into a DocumentFragment. */
-PyObject *LibXML_parse_chunk(const char *chunk);
+PyObject *LibXML_parse_chunk(const char *chunk, int keep_blanks);
 
 #endif /* LIBXML_PARSER_H */

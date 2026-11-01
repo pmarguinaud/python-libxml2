@@ -9,6 +9,7 @@
 #include <libxml/xpathInternals.h>
 #include <libxml/xmlerror.h>
 #include <libxml/HTMLparser.h>
+#include <libxml/HTMLtree.h>
 #include <libxml/c14n.h>
 #include <libxml/xmlsave.h>
 

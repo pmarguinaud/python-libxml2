@@ -628,6 +628,7 @@ node_eval(LibXML_NodeObject *self, PyObject *args)
         return NULL;
     }
     ctx->node = self->node;
+    LibXML_errors_begin();
 
     xmlNodePtr scope = self->node;
     if (scope->type == XML_DOCUMENT_NODE || scope->type == XML_HTML_DOCUMENT_NODE)
@@ -824,6 +825,16 @@ node_setOwnerDocument(LibXML_NodeObject *self, PyObject *args)
     Py_RETURN_NONE;
 }
 
+/* Set the base of this node, with xml:base on elements. */
+static PyObject *
+node_setBaseURI(LibXML_NodeObject *self, PyObject *args)
+{
+    const char *uri;
+    if (!PyArg_ParseTuple(args, "s", &uri)) return NULL;
+    xmlNodeSetBase(self->node, BAD_CAST uri);
+    Py_RETURN_NONE;
+}
+
 static PyObject *
 node_setNodeName(LibXML_NodeObject *self, PyObject *args)
 {
@@ -914,6 +925,7 @@ static PyMethodDef LibXML_Node_methods[] = {
     {"localNS",              (PyCFunction)node_getNamespace,          METH_NOARGS,  "Return the namespace of this node"},
     {"localNamespace",       (PyCFunction)node_getNamespace,          METH_NOARGS,  "Return the namespace of this node"},
     {"setNodeName",          (PyCFunction)node_setNodeName,           METH_VARARGS, "Rename this node"},
+    {"setBaseURI",           (PyCFunction)node_setBaseURI,            METH_VARARGS, "Set the base URI of this node"},
     {"setName",              (PyCFunction)node_setNodeName,           METH_VARARGS, "Rename this node"},
     {"hasAttributes",        (PyCFunction)node_hasAttributes,         METH_NOARGS,  "Return True if node has attributes"},
     {"attributes",           (PyCFunction)node_attributes,            METH_NOARGS,  "Return list of Attr nodes"},

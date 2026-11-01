@@ -22,9 +22,6 @@ PyInit__libxml(void)
     /* Initialise libxml2 */
     xmlInitParser();
 
-    /* Install structured error handler */
-    xmlSetStructuredErrorFunc(NULL, LibXML_error_handler);
-
     /* Ready all types (dependency order: Node first, then subtypes) */
     if (PyType_Ready(&LibXML_NodeType) < 0) return NULL;
     if (PyType_Ready(&LibXML_DocumentFragmentType) < 0) return NULL;
@@ -52,9 +49,8 @@ PyInit__libxml(void)
     PyObject *m = PyModule_Create(&moduledef);
     if (m == NULL) return NULL;
 
-    /* Error exception */
-    LibXML_Error = PyErr_NewException("xml_libxml.Error", PyExc_Exception, NULL);
-    if (LibXML_Error == NULL) { Py_DECREF(m); return NULL; }
+    /* The exception class is written in Python */
+    if (LibXML_errors_init() < 0) { Py_DECREF(m); return NULL; }
     Py_INCREF(LibXML_Error);
     if (PyModule_AddObject(m, "Error", LibXML_Error) < 0) {
         Py_DECREF(LibXML_Error); Py_DECREF(m); return NULL;

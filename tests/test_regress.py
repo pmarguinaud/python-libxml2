@@ -438,33 +438,33 @@ s = '<!DOCTYPE a [<!ENTITY x SYSTEM "file://%s">]><a>&x;</a>' % f.name
 try:
     print('SECRET' in P.parse_string(s).documentElement.textContent)
 except X.Error:
-    print(False)""", 'False', 3)
+    print(False)""", 'False')
 LATIN1 = "d = P.parse_string('<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><a>\\xe9</a>'.encode('latin-1'))\n"
 case('toString_latin1_doc', LATIN1 +
-     "print('\\xe9' in d.toString())", 'True', 3)
-case('toBytes_latin1_doc', LATIN1 + "print(b'\\xe9' in d.toBytes())", 'True', 3)
+     "print('\\xe9' in d.toString())", 'True')
+case('toBytes_latin1_doc', LATIN1 + "print(b'\\xe9' in d.toBytes())", 'True')
 case('toString_utf16_doc', """
 d = P.parse_string('<a>x</a>'); d.setEncoding('UTF-16'); print('<a>x</a>' in d.toString())""",
-     'True', 3)
+     'True')
 case('toString_unknown_encoding', """
-d = P.parse_string('<a/>'); d.setEncoding('NOPE'); print(raises(X.Error, d.toString))""", 'True', 3)
+d = P.parse_string('<a/>'); d.setEncoding('NOPE'); print(raises(X.Error, d.toString))""", 'True')
 case('parse_str_ignores_declared_encoding', """
 d = P.parse_string('<?xml version="1.0" encoding="ISO-8859-1"?><a>\\u00e9</a>')
-print(d.documentElement.textContent == '\\u00e9')""", 'True', 3)
+print(d.documentElement.textContent == '\\u00e9')""", 'True')
 case('html_file_latin2_serializes', """
-print(len(P.parse_html_file(os.path.join(EX, 'enc_latin2.html')).toString()) > 0)""", 'True', 3)
-case('load_xml_bytes', "print(P.load_xml(string=b'<a/>').documentElement.nodeName)", 'a', 3)
+print(len(P.parse_html_file(os.path.join(EX, 'enc_latin2.html')).toString()) > 0)""", 'True')
+case('load_xml_bytes', "print(P.load_xml(string=b'<a/>').documentElement.nodeName)", 'a')
 case('load_xml_pathlike', """
-import pathlib; print(P.load_xml(location=pathlib.Path(EX) / 'test.xml') is not None)""", 'True', 3)
+import pathlib; print(P.load_xml(location=pathlib.Path(EX) / 'test.xml') is not None)""", 'True')
 case('load_xml_per_call_option', """
-print(P.load_xml(string='<a> <b/> </a>', no_blanks=1).documentElement.toString())""", '<a><b/></a>', 3)
+print(P.load_xml(string='<a> <b/> </a>', no_blanks=1).documentElement.toString())""", '<a><b/></a>')
 case('load_html_IO', """
-import io; print(P.load_html(IO=io.StringIO('<p>x')) is not None)""", 'True', 3)
+import io; print(P.load_html(IO=io.StringIO('<p>x')) is not None)""", 'True')
 case('error_has_location', """
 try:
     P.parse_string('<a>\\n<b></a>')
 except X.Error as e:
-    print(e.line, e.code > 0)""", '2 True', 3)
+    print(e.line, e.code > 0)""", '2 True')
 case('error_in_thread_keeps_message', """
 import threading
 out = []
@@ -473,7 +473,7 @@ def w():
         P.parse_string('<a>')
     except X.Error as e:
         out.append(str(e))
-t = threading.Thread(target=w); t.start(); t.join(); print('libxml2 error' not in out[0])""", 'True', 3)
+t = threading.Thread(target=w); t.start(); t.join(); print('libxml2 error' not in out[0])""", 'True')
 case('stale_after_change_in_thread', STALE + """
 import threading
 t = threading.Thread(target=lambda: setattr(r, 'textContent', 'x')); t.start(); t.join()

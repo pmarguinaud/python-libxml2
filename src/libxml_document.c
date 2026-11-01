@@ -354,51 +354,109 @@ doc_createEntityReference(LibXML_NodeObject *self, PyObject *args)
 /* toString / toFile / toFH                                            */
 /* ------------------------------------------------------------------ */
 
+/* Serialize to bytes in the encoding of the document. */
+static PyObject *
+doc_dump(LibXML_NodeObject *self, PyObject *args, PyObject *kwds)
+{
+    int format = 0, skip_xml_declaration = 0, tag_compression = 0, skip_dtd = 0;
+    static char *kwlist[] = {"format", "skip_xml_declaration", "tag_compression",
+                             "skip_dtd", NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|iiii", kwlist, &format,
+                                     &skip_xml_declaration, &tag_compression, &skip_dtd))
+        return NULL;
+
+    xmlDocPtr doc = LibXML_DOC(self);
+    int opts = 0;
+    if (format > 0)           opts |= XML_SAVE_FORMAT;
+    if (skip_xml_declaration) opts |= XML_SAVE_NO_DECL;
+    if (tag_compression)      opts |= XML_SAVE_NO_EMPTY;
+
+    xmlBufferPtr buf = xmlBufferCreate();
+    if (buf == NULL) return PyErr_NoMemory();
+
+    LibXML_errors_begin();
+    xmlSaveCtxtPtr ctx = xmlSaveToBuffer(buf, (const char *)doc->encoding, opts);
+    if (ctx == NULL) {
+        xmlBufferFree(buf);
+        PyErr_Format(LibXML_Error, "unknown encoding: %s",
+                     doc->encoding ? (const char *)doc->encoding : "");
+        return NULL;
+    }
+
+    /* As in Perl, the DTD leaves the document for the time of the output. */
+    xmlDtdPtr dtd = skip_dtd ? xmlGetIntSubset(doc) : NULL;
+    xmlNodePtr dtd_next = dtd ? dtd->next : NULL;
+    if (dtd) xmlUnlinkNode((xmlNodePtr)dtd);
+
+    long written = xmlSaveDoc(ctx, doc);
+    int closed = xmlSaveClose(ctx);
+
+    if (dtd) {
+        dtd->parent = (xmlDocPtr)doc;
+        dtd->next = dtd_next;
+        dtd->prev = dtd_next ? dtd_next->prev : doc->last;
+        if (dtd->prev) dtd->prev->next = (xmlNodePtr)dtd;
+        else           doc->children = (xmlNodePtr)dtd;
+        if (dtd_next)  dtd_next->prev = (xmlNodePtr)dtd;
+        else           doc->last = (xmlNodePtr)dtd;
+        doc->intSubset = dtd;
+    }
+
+    if (written < 0 || closed < 0) {
+        xmlBufferFree(buf);
+        LibXML_raise_last_error();
+        return NULL;
+    }
+
+    PyObject *result = PyBytes_FromStringAndSize((const char *)xmlBufferContent(buf),
+                                                 xmlBufferLength(buf));
+    xmlBufferFree(buf);
+    return result;
+}
+
+/* Decode the output of a document. Its encoding has a Python codec, or an Error. */
+static PyObject *
+doc_decode(xmlDocPtr doc, const char *data, Py_ssize_t size)
+{
+    const char *enc = doc->encoding ? (const char *)doc->encoding : "utf-8";
+    PyObject *text = PyUnicode_Decode(data, size, enc, "strict");
+    if (text == NULL && PyErr_ExceptionMatches(PyExc_LookupError)) {
+        PyErr_Clear();
+        PyErr_Format(LibXML_Error, "unknown encoding: %s", enc);
+    }
+    return text;
+}
+
+static PyObject *
+doc_toBytes(LibXML_NodeObject *self, PyObject *args, PyObject *kwds)
+{
+    return doc_dump(self, args, kwds);
+}
+
 static PyObject *
 doc_toString(LibXML_NodeObject *self, PyObject *args, PyObject *kwds)
 {
-    int format = 0;
-    int skip_xml_declaration = 0;
-    int tag_compression = 0;  /* 1 = no empty tags (force <bar></bar>) */
-    static char *kwlist[] = {"format", "skip_xml_declaration",
-                              "tag_compression", NULL};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|iii", kwlist,
-                                     &format, &skip_xml_declaration,
-                                     &tag_compression))
-        return NULL;
+    PyObject *bytes = doc_dump(self, args, kwds);
+    if (bytes == NULL) return NULL;
+    PyObject *text = doc_decode(LibXML_DOC(self), PyBytes_AS_STRING(bytes),
+                                PyBytes_GET_SIZE(bytes));
+    Py_DECREF(bytes);
+    return text;
+}
 
-    const char *enc = LibXML_DOC(self)->encoding ?
-        (const char *)LibXML_DOC(self)->encoding : "UTF-8";
-
-    if (skip_xml_declaration || tag_compression) {
-        /* Use xmlSaveCtxt for fine-grained control */
-        xmlBufferPtr buf = xmlBufferCreate();
-        if (!buf) return PyErr_NoMemory();
-        int opts = 0;
-        if (format)               opts |= XML_SAVE_FORMAT;
-        if (skip_xml_declaration) opts |= XML_SAVE_NO_DECL;
-        if (tag_compression)      opts |= XML_SAVE_NO_EMPTY;
-        xmlSaveCtxtPtr ctx = xmlSaveToBuffer(buf, enc, opts);
-        if (!ctx) { xmlBufferFree(buf); return PyErr_NoMemory(); }
-        xmlSaveDoc(ctx, LibXML_DOC(self));
-        xmlSaveClose(ctx);
-        PyObject *result = PyUnicode_FromStringAndSize(
-            (const char *)xmlBufferContent(buf),
-            (Py_ssize_t)xmlBufferLength(buf));
-        xmlBufferFree(buf);
-        return result;
-    }
-
+static PyObject *
+doc_toStringHTML(LibXML_NodeObject *self, PyObject *args)
+{
     xmlChar *buf = NULL;
-    int      size = 0;
-    xmlDocDumpFormatMemoryEnc(LibXML_DOC(self), &buf, &size, enc, format);
+    int size = 0;
+    htmlDocDumpMemory(LibXML_DOC(self), &buf, &size);
     if (buf == NULL) {
-        PyErr_SetString(PyExc_MemoryError, "xmlDocDumpFormatMemoryEnc failed");
+        LibXML_raise_last_error();
         return NULL;
     }
-    PyObject *result = PyUnicode_FromStringAndSize((const char *)buf, size);
+    PyObject *text = doc_decode(LibXML_DOC(self), (const char *)buf, size);
     xmlFree(buf);
-    return result;
+    return text;
 }
 
 static PyObject *
@@ -624,6 +682,10 @@ static PyMethodDef LibXML_Document_methods[] = {
     {"cloneNode",             (PyCFunction)doc_cloneNode,             METH_VARARGS, "Clone document (deep=False for shallow)"},
     {"toString",              (PyCFunction)doc_toString,              METH_VARARGS|METH_KEYWORDS, "Serialize to string"},
     {"serialize",             (PyCFunction)doc_toString,              METH_VARARGS|METH_KEYWORDS, "Serialize to string (alias)"},
+    {"toBytes",               (PyCFunction)doc_toBytes,               METH_VARARGS|METH_KEYWORDS, "Serialize to bytes in the document encoding"},
+    {"toStringHTML",          (PyCFunction)doc_toStringHTML,          METH_NOARGS,  "Serialize as HTML"},
+    {"serialize_html",        (PyCFunction)doc_toStringHTML,          METH_NOARGS,  "Serialize as HTML (alias)"},
+    {"setURI",                (PyCFunction)doc_setBaseURI,            METH_VARARGS, "Set the URI of the document"},
     {"toFile",                (PyCFunction)doc_toFile,                METH_VARARGS|METH_KEYWORDS, "Save to file"},
     {"getElementsByTagName",   (PyCFunction)doc_getElementsByTagName,   METH_VARARGS, "Get elements by tag name"},
     {"getElementsByTagNameNS", (PyCFunction)doc_getElementsByTagNameNS, METH_VARARGS, "Get elements by namespace tag name"},
@@ -657,6 +719,7 @@ static PyGetSetDef LibXML_Document_getset[] = {
     {"version",        (getter)doc_get_version,     (setter)doc_set_version,     "XML version",    NULL},
     {"standalone",     (getter)doc_get_standalone,  (setter)doc_set_standalone,  "Standalone flag",NULL},
     {"URI",            (getter)doc_get_URI,         (setter)doc_set_URI,         "Document URI",   NULL},
+    {"documentURI",    (getter)doc_get_URI,         (setter)doc_set_URI,         "Document URI",   NULL},
     {NULL}
 };
 

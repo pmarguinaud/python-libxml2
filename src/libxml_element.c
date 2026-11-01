@@ -621,7 +621,7 @@ elem_appendWellBalancedChunk(LibXML_NodeObject *self, PyObject *args)
     const char *chunk;
     if (!PyArg_ParseTuple(args, "s", &chunk)) return NULL;
 
-    PyObject *frag = LibXML_parse_chunk(chunk);
+    PyObject *frag = LibXML_parse_chunk(chunk, 1);
     if (frag == NULL) return NULL;
 
     int rc = LibXML_insert_node(LibXML_NODE(frag), self->node, NULL);

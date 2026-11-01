@@ -48,11 +48,24 @@ from xml_libxml._libxml import (
     LIBXML_DOTTED_VERSION,
 )
 
+from xml_libxml import ErrNo
+
+
+def load_xml(*args, **options):
+    """Parse XML with the given options: string=, location= or IO=."""
+    return Parser().load_xml(*args, **options)
+
+
+def load_html(*args, **options):
+    """Parse HTML with the given options: string=, location= or IO=."""
+    return Parser().load_html(*args, **options)
+
+
 __version__ = '0.1.0'
 __all__ = [
     'Parser', 'Document', 'Node', 'Element', 'Text', 'Comment',
     'CDATASection', 'PI', 'Attr', 'Namespace', 'NodeList', 'XPathContext', 'DocumentFragment',
-    'Error',
+    'Error', 'ErrNo', 'load_xml', 'load_html',
     'XML_ELEMENT_NODE', 'XML_ATTRIBUTE_NODE', 'XML_TEXT_NODE',
     'XML_CDATA_SECTION_NODE', 'XML_ENTITY_REF_NODE', 'XML_ENTITY_NODE',
     'XML_PI_NODE', 'XML_COMMENT_NODE', 'XML_DOCUMENT_NODE',
