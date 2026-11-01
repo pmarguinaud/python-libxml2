@@ -332,7 +332,13 @@ parser_get_##name(LibXML_ParserObject *self, void *closure) { \
 } \
 static int \
 parser_set_##name(LibXML_ParserObject *self, PyObject *value, void *closure) { \
-    self->name = PyObject_IsTrue(value); \
+    if (value == NULL) { \
+        PyErr_SetString(PyExc_TypeError, "cannot delete parser option"); \
+        return -1; \
+    } \
+    int truth = PyObject_IsTrue(value); \
+    if (truth < 0) return -1; \
+    self->name = truth; \
     return 0; \
 }
 

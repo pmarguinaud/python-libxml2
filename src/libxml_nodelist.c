@@ -44,25 +44,11 @@ LibXML_NodeList_FromNodeSet(xmlNodeSetPtr ns, PyObject *doc_obj)
     for (Py_ssize_t i = 0; i < count; i++) {
         xmlNodePtr n = ns->nodeTab[i];
         /* Namespace nodes from XPath are temporary copies freed with the
-         * XPath result object.  Make our own copy so the wrapper survives.
-         * Note: xmlCopyNamespace may refuse the built-in xml: namespace,
-         * so we copy manually. */
-        if (n && n->type == XML_NAMESPACE_DECL) {
-            xmlNsPtr orig = (xmlNsPtr)n;
-            xmlNsPtr ns_copy = (xmlNsPtr)xmlMalloc(sizeof(xmlNs));
-            if (ns_copy) {
-                memset(ns_copy, 0, sizeof(xmlNs));
-                ns_copy->type   = XML_LOCAL_NAMESPACE; /* = XML_NAMESPACE_DECL */
-                if (orig->href)   ns_copy->href   = xmlStrdup(orig->href);
-                if (orig->prefix) ns_copy->prefix = xmlStrdup(orig->prefix);
-                n = (xmlNodePtr)ns_copy;
-            }
-        }
-        list->nodes[i] = LibXML_Node_Wrap(n, doc_obj);
-        if (list->nodes[i] && n && n->type == XML_NAMESPACE_DECL) {
-            /* Mark as owned so dealloc will free our copy */
-            ((LibXML_NodeObject *)list->nodes[i])->owned = 1;
-        }
+         * XPath result object, so each wrapper needs its own copy. */
+        if (n && n->type == XML_NAMESPACE_DECL)
+            list->nodes[i] = LibXML_Ns_WrapCopy((xmlNsPtr)n, doc_obj);
+        else
+            list->nodes[i] = LibXML_Node_Wrap(n, doc_obj);
         if (!list->nodes[i]) {
             /* Clear what we've set so far */
             for (Py_ssize_t j = 0; j < i; j++) Py_XDECREF(list->nodes[j]);

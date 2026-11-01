@@ -23,6 +23,12 @@ typedef struct {
  */
 PyObject *LibXML_Node_Wrap(xmlNodePtr node, PyObject *doc_obj);
 
+/*
+ * Wrap a private copy of a namespace declaration. The wrapper owns the copy,
+ * so it stays valid after the element or XPath result it came from is freed.
+ */
+PyObject *LibXML_Ns_WrapCopy(xmlNsPtr orig, PyObject *doc_obj);
+
 /* Node deregister callback — install via xmlDeregisterNodeDefault() at module init */
 void LibXML_node_deregister(xmlNodePtr node);
 
@@ -38,7 +44,13 @@ void LibXML_update_doc_refs(xmlNodePtr node, PyObject *new_doc_obj);
 /* Raise a Python exception from the last libxml2 error */
 void LibXML_raise_last_error(void);
 
-/* Structured error handler — install at module init */
-void LibXML_error_handler(void *ctx, xmlErrorPtr error);
+/* Structured error handler — install at module init.
+ * libxml2 made the error argument const in 2.12. */
+#if LIBXML_VERSION >= 21200
+#define LIBXML_CONST_ERROR const
+#else
+#define LIBXML_CONST_ERROR
+#endif
+void LibXML_error_handler(void *ctx, LIBXML_CONST_ERROR xmlError *error);
 
 #endif /* LIBXML_UTILS_H */

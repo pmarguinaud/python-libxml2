@@ -83,7 +83,7 @@ doc_get_documentElement(LibXML_NodeObject *self, void *closure)
 static int
 doc_set_documentElement(LibXML_NodeObject *self, PyObject *value, void *closure)
 {
-    if (!LibXML_Node_Check(value)) {
+    if (value == NULL || !LibXML_Node_Check(value)) {
         PyErr_SetString(PyExc_TypeError, "expected a Node");
         return -1;
     }
@@ -148,8 +148,13 @@ doc_get_standalone(LibXML_NodeObject *self, void *closure)
 static int
 doc_set_standalone(LibXML_NodeObject *self, PyObject *value, void *closure)
 {
-    LibXML_DOC(self)->standalone = (int)PyLong_AsLong(value);
-    if (PyErr_Occurred()) return -1;
+    if (value == NULL) {
+        PyErr_SetString(PyExc_TypeError, "cannot delete standalone");
+        return -1;
+    }
+    long standalone = PyLong_AsLong(value);
+    if (standalone == -1 && PyErr_Occurred()) return -1;
+    LibXML_DOC(self)->standalone = (int)standalone;
     return 0;
 }
 
@@ -613,7 +618,8 @@ doc_setBaseURI(LibXML_NodeObject *self, PyObject *args)
 {
     PyObject *val;
     if (!PyArg_ParseTuple(args, "O", &val)) return NULL;
-    return doc_set_URI(self, val, NULL) < 0 ? NULL : Py_None;
+    if (doc_set_URI(self, val, NULL) < 0) return NULL;
+    Py_RETURN_NONE;
 }
 
 static PyObject *

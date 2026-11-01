@@ -492,6 +492,11 @@ xpc_registerFunction(LibXML_XPathContextObject *self, PyObject *args)
         return NULL;
     }
 
+    if (self->ctx == NULL) {
+        PyErr_SetString(LibXML_Error, "XPathContext has no context node");
+        return NULL;
+    }
+
     /* Store the callback; we use a simple approach: store in userData */
     /* For proper multi-function support a hash would be needed;
      * for now we support one function at a time */
@@ -521,6 +526,11 @@ xpc_registerFunctionNS(LibXML_XPathContextObject *self, PyObject *args)
     if (!PyArg_ParseTuple(args, "ssO", &name, &ns_uri, &callback)) return NULL;
     if (!PyCallable_Check(callback)) {
         PyErr_SetString(PyExc_TypeError, "callback must be callable");
+        return NULL;
+    }
+
+    if (self->ctx == NULL) {
+        PyErr_SetString(LibXML_Error, "XPathContext has no context node");
         return NULL;
     }
 

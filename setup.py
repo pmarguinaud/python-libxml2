@@ -41,6 +41,7 @@ libxml_ext = Extension(
     ],
     include_dirs=include_dirs + ['src'],
     library_dirs=library_dirs,
+    runtime_library_dirs=library_dirs,
     libraries=libraries,
     extra_compile_args=['-Wall', '-Wno-unused-function'],
 )

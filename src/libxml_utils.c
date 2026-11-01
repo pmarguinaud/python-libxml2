@@ -9,7 +9,7 @@ static xmlError last_error;
 static int      last_error_set = 0;
 
 void
-LibXML_error_handler(void *ctx, xmlErrorPtr error)
+LibXML_error_handler(void *ctx, LIBXML_CONST_ERROR xmlError *error)
 {
     (void)ctx;
     xmlResetError(&last_error);
@@ -153,6 +153,30 @@ void
 LibXML_update_doc_refs(xmlNodePtr node, PyObject *new_doc_obj)
 {
     update_doc_refs_node(node, new_doc_obj);
+}
+
+/* ------------------------------------------------------------------ */
+/* Namespace declaration wrappers                                      */
+/* ------------------------------------------------------------------ */
+
+/* Copied by hand: xmlCopyNamespace may refuse the built-in xml: namespace. */
+PyObject *
+LibXML_Ns_WrapCopy(xmlNsPtr orig, PyObject *doc_obj)
+{
+    xmlNsPtr copy = (xmlNsPtr)xmlMalloc(sizeof(xmlNs));
+    if (copy == NULL) return PyErr_NoMemory();
+    memset(copy, 0, sizeof(xmlNs));
+    copy->type = XML_LOCAL_NAMESPACE;  /* = XML_NAMESPACE_DECL */
+    if (orig->href)   copy->href   = xmlStrdup(orig->href);
+    if (orig->prefix) copy->prefix = xmlStrdup(orig->prefix);
+
+    PyObject *wrapper = LibXML_Node_Wrap((xmlNodePtr)copy, doc_obj);
+    if (wrapper == NULL) {
+        xmlFreeNs(copy);
+        return NULL;
+    }
+    ((LibXML_NodeObject *)wrapper)->owned = 1;
+    return wrapper;
 }
 
 /* ------------------------------------------------------------------ */

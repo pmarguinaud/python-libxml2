@@ -48,6 +48,10 @@ attr_get_value(LibXML_NodeObject *self, void *closure)
 static int
 attr_set_value(LibXML_NodeObject *self, PyObject *value, void *closure)
 {
+    if (value == NULL) {
+        PyErr_SetString(PyExc_TypeError, "cannot delete attribute value");
+        return -1;
+    }
     const char *s = PyUnicode_AsUTF8(value);
     if (!s) return -1;
     xmlAttrPtr attr = (xmlAttrPtr)self->node;

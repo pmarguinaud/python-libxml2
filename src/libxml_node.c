@@ -1016,7 +1016,8 @@ node_attributes(LibXML_NodeObject *self, PyObject *args)
     /* Namespace declarations (nsDef chain) — nodeType == XML_NAMESPACE_DECL (18) */
     xmlNsPtr ns = self->node->nsDef;
     while (ns) {
-        PyObject *a = LibXML_Node_Wrap((xmlNodePtr)ns, node_doc_obj(self));
+        PyObject *a = LibXML_Ns_WrapCopy(ns, node_doc_obj(self));
+        if (a == NULL) { Py_DECREF(list); return NULL; }
         PyList_Append(list, a);
         Py_DECREF(a);
         ns = ns->next;

@@ -111,37 +111,65 @@ chardata_deleteData(LibXML_NodeObject *self, PyObject *args)
     Py_RETURN_NONE;
 }
 
+/* Replace `from` with `to` in one pass over src, like Perl's s///: text that
+ * was just inserted is never scanned again. Returns a new string, or NULL if
+ * out of memory. `from` must not be empty. */
+static xmlChar *
+str_replace(const xmlChar *src, const char *from, const char *to, int all)
+{
+    size_t flen = strlen(from), tlen = strlen(to), count = 0;
+    const xmlChar *p = src, *hit;
+
+    while ((hit = xmlStrstr(p, BAD_CAST from)) != NULL) {
+        count++;
+        p = hit + flen;
+        if (!all) break;
+    }
+
+    size_t total = strlen((const char *)src) - count * flen + count * tlen;
+    xmlChar *out = xmlMalloc(total + 1);
+    if (out == NULL) return NULL;
+
+    xmlChar *w = out;
+    p = src;
+    for (size_t i = 0; i < count; i++) {
+        hit = xmlStrstr(p, BAD_CAST from);
+        memcpy(w, p, hit - p);
+        w += hit - p;
+        memcpy(w, to, tlen);
+        w += tlen;
+        p = hit + flen;
+    }
+    strcpy((char *)w, (const char *)p);
+    return out;
+}
+
+/* Shared body of replaceDataString and deleteDataString */
+static PyObject *
+chardata_replace_string(LibXML_NodeObject *self, const char *from,
+                        const char *to, int all)
+{
+    if (from[0] == '\0') Py_RETURN_NONE;
+
+    xmlChar *content = xmlNodeGetContent(self->node);
+    if (!content) Py_RETURN_NONE;
+
+    xmlChar *newval = str_replace(content, from, to, all);
+    xmlFree(content);
+    if (!newval) return PyErr_NoMemory();
+
+    xmlNodeSetContent(self->node, newval);
+    xmlFree(newval);
+    Py_RETURN_NONE;
+}
+
 static PyObject *
 chardata_deleteDataString(LibXML_NodeObject *self, PyObject *args)
 {
     const char *target;
     int all = 0;
     if (!PyArg_ParseTuple(args, "s|i", &target, &all)) return NULL;
-
-    xmlChar *old = xmlNodeGetContent(self->node);
-    if (!old) Py_RETURN_NONE;
-
-    xmlChar *pos = xmlStrstr(old, BAD_CAST target);
-    if (!pos) { xmlFree(old); Py_RETURN_NONE; }
-
-    int tlen = (int)strlen(target);
-    do {
-        int before = (int)(pos - old);
-        int total  = (int)xmlStrlen(old);
-        int after  = total - before - tlen;
-        xmlChar *newval = xmlMalloc(total - tlen + 1);
-        if (!newval) { xmlFree(old); return PyErr_NoMemory(); }
-        memcpy(newval, old, before);
-        memcpy(newval + before, pos + tlen, after + 1);
-        xmlFree(old);
-        old = newval;
-        if (!all) break;
-        pos = xmlStrstr(old, BAD_CAST target);
-    } while (pos);
-
-    xmlNodeSetContent(self->node, old);
-    xmlFree(old);
-    Py_RETURN_NONE;
+    return chardata_replace_string(self, target, "", all);
 }
 
 static PyObject *
@@ -178,31 +206,7 @@ chardata_replaceDataString(LibXML_NodeObject *self, PyObject *args)
     int all = 0;
     if (!PyArg_ParseTuple(args, "ss|i", &old_str, &new_str, &all)) return NULL;
 
-    xmlChar *content = xmlNodeGetContent(self->node);
-    if (!content) Py_RETURN_NONE;
-
-    int olen = (int)strlen(old_str);
-    int nlen = (int)strlen(new_str);
-    xmlChar *pos;
-
-    do {
-        pos = xmlStrstr(content, BAD_CAST old_str);
-        if (!pos) break;
-        int before = (int)(pos - content);
-        int total  = (int)xmlStrlen(content);
-        int after  = total - before - olen;
-        xmlChar *newval = xmlMalloc(total - olen + nlen + 1);
-        if (!newval) { xmlFree(content); return PyErr_NoMemory(); }
-        memcpy(newval, content, before);
-        memcpy(newval + before, new_str, nlen);
-        memcpy(newval + before + nlen, pos + olen, after + 1);
-        xmlFree(content);
-        content = newval;
-    } while (all && (pos = xmlStrstr(content, BAD_CAST old_str)));
-
-    xmlNodeSetContent(self->node, content);
-    xmlFree(content);
-    Py_RETURN_NONE;
+    return chardata_replace_string(self, old_str, new_str, all);
 }
 
 static PyGetSetDef chardata_getset[] = {
