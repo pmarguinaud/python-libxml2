@@ -13,9 +13,6 @@ LibXML_parser_options(LibXML_ParserObject *self)
     int opts = XML_PARSE_NOERROR | XML_PARSE_NOWARNING;
     if (self->recover)           opts |= XML_PARSE_RECOVER;
     if (self->no_blanks)         opts |= XML_PARSE_NOBLANKS;
-    if (!self->expand_entities)  opts |= XML_PARSE_NOENT;   /* 0 = expand */
-    else                         opts &= ~XML_PARSE_NOENT;
-    /* Note: expand_entities=1 (default) means DO expand entities */
     if (self->expand_entities)   opts |= XML_PARSE_NOENT;
     if (self->load_ext_dtd)      opts |= XML_PARSE_DTDLOAD;
     if (self->validation)        opts |= XML_PARSE_DTDVALID;
@@ -98,7 +95,7 @@ parser_parse_string(LibXML_ParserObject *self, PyObject *args, PyObject *kwds)
         LibXML_raise_last_error();
         return NULL;
     }
-    return LibXML_Node_Wrap((xmlNodePtr)doc, NULL);
+    return LibXML_Node_Wrap((xmlNodePtr)doc);
 }
 
 /* ------------------------------------------------------------------ */
@@ -121,7 +118,7 @@ parser_parse_file(LibXML_ParserObject *self, PyObject *args, PyObject *kwds)
         LibXML_raise_last_error();
         return NULL;
     }
-    return LibXML_Node_Wrap((xmlNodePtr)doc, NULL);
+    return LibXML_Node_Wrap((xmlNodePtr)doc);
 }
 
 /* ------------------------------------------------------------------ */
@@ -177,7 +174,7 @@ parser_load_xml(LibXML_ParserObject *self, PyObject *args, PyObject *kwds)
         LibXML_raise_last_error();
         return NULL;
     }
-    return LibXML_Node_Wrap((xmlNodePtr)doc, NULL);
+    return LibXML_Node_Wrap((xmlNodePtr)doc);
 }
 
 /* ------------------------------------------------------------------ */
@@ -215,7 +212,7 @@ parser_parse_html_string(LibXML_ParserObject *self, PyObject *args, PyObject *kw
         LibXML_raise_last_error();
         return NULL;
     }
-    return LibXML_Node_Wrap((xmlNodePtr)doc, NULL);
+    return LibXML_Node_Wrap((xmlNodePtr)doc);
 }
 
 static PyObject *
@@ -234,7 +231,7 @@ parser_parse_html_file(LibXML_ParserObject *self, PyObject *args, PyObject *kwds
         LibXML_raise_last_error();
         return NULL;
     }
-    return LibXML_Node_Wrap((xmlNodePtr)doc, NULL);
+    return LibXML_Node_Wrap((xmlNodePtr)doc);
 }
 
 static PyObject *
@@ -270,7 +267,7 @@ parser_load_html(LibXML_ParserObject *self, PyObject *args, PyObject *kwds)
         LibXML_raise_last_error();
         return NULL;
     }
-    return LibXML_Node_Wrap((xmlNodePtr)doc, NULL);
+    return LibXML_Node_Wrap((xmlNodePtr)doc);
 }
 
 /* ------------------------------------------------------------------ */
@@ -296,27 +293,25 @@ parser_parse_balanced_chunk(LibXML_ParserObject *self, PyObject *args)
         return NULL;
     }
 
-    /* Create a DocumentFragment */
+    /* The fragment owns its nodes, and the document holding them stays private */
+    PyObject *doc_wrap = LibXML_Node_Wrap((xmlNodePtr)doc);
+    if (!doc_wrap) {
+        if (list) xmlFreeNodeList(list);
+        xmlFreeDoc(doc);
+        return NULL;
+    }
+    ((LibXML_NodeObject *)doc_wrap)->hidden = 1;
+
     xmlNodePtr frag = xmlNewDocFragment(doc);
     if (!frag) {
         if (list) xmlFreeNodeList(list);
-        xmlFreeDoc(doc);
+        Py_DECREF(doc_wrap);
         return PyErr_NoMemory();
     }
     xmlAddChildList(frag, list);
 
-    /* Wrap the document first so the fragment can hold a ref to it */
-    PyObject *doc_wrap = LibXML_Node_Wrap((xmlNodePtr)doc, NULL);
-    if (!doc_wrap) {
-        xmlFreeDoc(doc);
-        return NULL;
-    }
-
-    PyObject *frag_wrap = LibXML_Node_Wrap(frag, doc_wrap);
-    if (frag_wrap) {
-        ((LibXML_NodeObject *)frag_wrap)->owned = 1;
-    }
-    /* The document is "owned" by the doc wrapper; we release our ref */
+    PyObject *frag_wrap = LibXML_Node_Wrap(frag);
+    if (!frag_wrap) xmlFreeNode(frag);
     Py_DECREF(doc_wrap);
     return frag_wrap;
 }

@@ -8,6 +8,7 @@
 #include "libxml_nodelist.h"
 #include "libxml_xpath.h"
 #include "libxml_parser.h"
+#include "libxml_namespace.h"
 
 PyObject *LibXML_Error = NULL;
 
@@ -24,9 +25,6 @@ PyInit__libxml(void)
     /* Install structured error handler */
     xmlSetStructuredErrorFunc(NULL, LibXML_error_handler);
 
-    /* Install node deregister callback to manage LibXML_NodePrivate lifetime */
-    xmlDeregisterNodeDefault(LibXML_node_deregister);
-
     /* Ready all types (dependency order: Node first, then subtypes) */
     if (PyType_Ready(&LibXML_NodeType) < 0) return NULL;
     if (PyType_Ready(&LibXML_DocumentFragmentType) < 0) return NULL;
@@ -37,6 +35,7 @@ PyInit__libxml(void)
     if (PyType_Ready(&LibXML_CDATASectionType) < 0) return NULL;
     if (PyType_Ready(&LibXML_PIType) < 0) return NULL;
     if (PyType_Ready(&LibXML_AttrType) < 0) return NULL;
+    if (PyType_Ready(&LibXML_NamespaceType) < 0) return NULL;
     if (PyType_Ready(&LibXML_NodeListType) < 0) return NULL;
     if (LibXML_NodeList_Init() < 0) return NULL;
     if (PyType_Ready(&LibXML_XPathContextType) < 0) return NULL;
@@ -77,6 +76,7 @@ PyInit__libxml(void)
     ADD_TYPE("CDATASection",     LibXML_CDATASectionType)
     ADD_TYPE("PI",               LibXML_PIType)
     ADD_TYPE("Attr",             LibXML_AttrType)
+    ADD_TYPE("Namespace",        LibXML_NamespaceType)
     ADD_TYPE("NodeList",         LibXML_NodeListType)
     ADD_TYPE("XPathContext",     LibXML_XPathContextType)
     ADD_TYPE("Parser",           LibXML_ParserType)

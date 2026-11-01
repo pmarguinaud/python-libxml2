@@ -7,7 +7,9 @@ from xml_libxml._libxml import (
     Text,
     Comment,
     CDATASection,
+    PI,
     Attr,
+    Namespace,
     NodeList,
     XPathContext,
     DocumentFragment,
@@ -49,7 +51,7 @@ from xml_libxml._libxml import (
 __version__ = '0.1.0'
 __all__ = [
     'Parser', 'Document', 'Node', 'Element', 'Text', 'Comment',
-    'CDATASection', 'Attr', 'NodeList', 'XPathContext', 'DocumentFragment',
+    'CDATASection', 'PI', 'Attr', 'Namespace', 'NodeList', 'XPathContext', 'DocumentFragment',
     'Error',
     'XML_ELEMENT_NODE', 'XML_ATTRIBUTE_NODE', 'XML_TEXT_NODE',
     'XML_CDATA_SECTION_NODE', 'XML_ENTITY_REF_NODE', 'XML_ENTITY_NODE',

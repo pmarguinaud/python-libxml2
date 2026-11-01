@@ -64,13 +64,13 @@ def case(name, code, expected, phase=None, strict=True):
 
 case('ns_wrapper_outlives_element', """
 d = X.Document(); e = d.createElementNS('u', 'p:a'); a = e.attributes()
-del e; gc.collect(); print(a[0].nodeName, a[0].nodeValue)""", 'p u')
+del e; gc.collect(); print(a[0].declaredPrefix, a[0].declaredURI)""", 'p u')
 case('ns_wrapper_outlives_decl', """
 d = P.parse_string('<r xmlns:p="u"/>'); r = d.documentElement; n = r.attributes()[0]
-r.setNamespaceDeclURI('p', None); print(n.nodeName)""", 'p')
+r.setNamespaceDeclURI('p', None); print(n.declaredPrefix)""", 'p')
 case('xpath_ns_node_outlives_result', """
 d = P.parse_string('<r xmlns:p="u"/>'); n = d.findnodes('/r/namespace::p')[0]
-gc.collect(); print(n.nodeName, n.nodeValue)""", 'p u')
+gc.collect(); print(n.declaredPrefix, n.nodeValue)""", 'p u')
 case('setBaseURI_keeps_None_refcount', """
 d = P.parse_string('<a/>'); r = sys.getrefcount(None)
 for i in range(100000): d.setBaseURI('u')
@@ -127,7 +127,7 @@ print(k.nodeName)""", 'kid')
 case('standalone_parent_takes_doc_node', """
 d = P.parse_string('<a><b/></a>'); c = d.documentElement.firstChild
 e = X.Element('x'); e.appendChild(c); del d; gc.collect()
-print(e.toString(), c.nodeName)""", '<x><b/></x> b', 1, False)
+print(e.toString(), c.nodeName)""", '<x><b/></x> b')
 case('setAttributeNode_moves_attr', """
 d = P.parse_string('<a><b x="1"/><c/></a>'); r = d.documentElement; b, c = r.childNodes()
 c.setAttributeNode(b.getAttributeNode('x')); print(r.toString())""", '<a><b/><c x="1"/></a>')
@@ -137,104 +137,208 @@ c.setAttributeNode(b.getAttributeNode('x')); print(r.toString())""", '<a><b/><c 
 STALE = """
 d = P.parse_string('<a><b/></a>'); r = d.documentElement; k = r.firstChild
 """
-case('stale_after_textContent', STALE + "r.textContent = 'x'; print(k.nodeName)", 'b', 1)
-case('stale_after_removeChildNodes', STALE + "r.removeChildNodes(); print(k.nodeName)", 'b', 1)
+case('stale_after_textContent', STALE + "r.textContent = 'x'; print(k.nodeName)", 'b')
+case('stale_after_removeChildNodes', STALE + "r.removeChildNodes(); print(k.nodeName)", 'b')
 case('stale_after_normalize', """
 d = X.Document(); r = d.createElement('a'); d.setDocumentElement(r)
 a = d.createTextNode('1'); b = d.createTextNode('2'); r.appendChild(a); r.appendChild(b)
-r.normalize(); print(b.nodeName, a.data)""", '#text 12', 1)
+r.normalize(); print(b.nodeName, a.data)""", '#text 12')
 case('stale_detached_parent_dropped', """
 d = P.parse_string('<a><b><c/></b></a>'); r = d.documentElement
-b = r.removeChild(r.firstChild); c = b.firstChild; del b; gc.collect(); print(c.nodeName)""", 'c', 1)
+b = r.removeChild(r.firstChild); c = b.firstChild; del b; gc.collect(); print(c.nodeName)""", 'c')
 case('stale_clone_temporary', """
 r = P.parse_string('<a><b/></a>').documentElement; print(r.cloneNode(1).firstChild.nodeName)""",
-     'b', 1)
+     'b')
 case('stale_created_subtree_parent_dropped', """
 d = X.Document()
 def mk():
     a = d.createElement('a'); b = d.createElement('b'); a.appendChild(b); return b
-print(mk().parentNode.nodeName)""", 'a', 1)
+print(mk().parentNode.nodeName)""", 'a')
 case('stale_replaced_attr', """
 d = P.parse_string('<a x="1"/>'); r = d.documentElement; old = r.getAttributeNode('x')
-r.setAttributeNode(d.createAttribute('x', '2')); print(old.value)""", '1', 1)
+r.setAttributeNode(d.createAttribute('x', '2')); print(old.value)""", '1')
 case('stale_removeAttribute', """
 d = P.parse_string('<a n="1"/>'); r = d.documentElement; at = r.getAttributeNode('n')
-r.removeAttribute('n'); print(at.value)""", '1', 1)
+r.removeAttribute('n'); print(at.value)""", '1')
 case('stale_setAttribute', """
 d = P.parse_string('<a n="1"/>'); r = d.documentElement; at = r.getAttributeNode('n'); t = at.firstChild
-r.setAttribute('n', '2'); print(at.value, t.nodeName)""", '2 #text', 1)
+r.setAttribute('n', '2'); print(at.value, t.nodeName)""", '2 #text')
 case('stale_insertBefore_merged_text', """
 d = P.parse_string('<a>x<b/></a>'); r = d.documentElement
 t = d.createTextNode('y'); r.insertBefore(t, r.firstChild); print(t.nodeName, r.firstChild.nodeName)""",
      '#text #text')
 case('documentElement_setter', """
 d = X.Document(); e = d.createElement('r'); d.documentElement = e; del e; gc.collect()
-print(d.documentElement.nodeName); del d; gc.collect()""", 'r', 1)
+print(d.documentElement.nodeName); del d; gc.collect()""", 'r')
 case('standalone_grandchild', """
 e = X.Element('x'); y = e.appendChild(X.Element('y')); print(y.baseURI, y.toString())
-y.appendChild(X.Element('z')); print(e.toString())""", 'None <y/>\n<x><y><z/></y></x>', 1)
+y.appendChild(X.Element('z')); print(e.toString())""", 'None <y/>\n<x><y><z/></y></x>')
 case('standalone_ownerDocument', """
 e = X.Element('x'); y = e.appendChild(X.Element('y'))
-print(e.ownerDocument, y.ownerDocument, X.Attr('n', 'v').ownerDocument)""", 'None None None', 1)
-case('export_PI', "from xml_libxml import PI; print(PI.__name__)", 'PI', 1)
+print(e.ownerDocument, y.ownerDocument, X.Attr('n', 'v').ownerDocument)""", 'None None None')
+case('export_PI', "from xml_libxml import PI; print(PI.__name__)", 'PI')
 
 NSNODE = "d = P.parse_string('<r xmlns:p=\"u\"/>'); n = d.documentElement.attributes()[0]\n"
 for name in ('firstChild', 'previousSibling'):
-    case('nsnode_' + name, NSNODE + "print(survives(n, %r))" % name, 'True', 1)
+    case('nsnode_' + name, NSNODE + "print(survives(n, %r))" % name, 'True')
 for name in ('childNodes', 'toString', 'line_number'):
-    case('nsnode_' + name, NSNODE + "print(survives(n, %r, True))" % name, 'True', 1)
-case('nsnode_prefix', NSNODE + "print(n.declaredPrefix, n.declaredURI)", 'p u', 1)
+    case('nsnode_' + name, NSNODE + "print(survives(n, %r, True))" % name, 'True')
+case('nsnode_prefix', NSNODE + "print(n.declaredPrefix, n.declaredURI)", 'p u')
+
+# ---------------------------------------------------------------- Perl t/
+
+case('perl_18docfree', "d = X.Document(); d = X.Document(); del d; gc.collect(); print('ok')", 'ok')
+case('perl_48_removeChild_crashes_rt_80395', """
+s = '<!DOCTYPE bug [<!ENTITY myent "xyz">]><bug><elem>&myent;</elem></bug>'
+r = X.Parser(expand_entities=0).parse_string(s).documentElement
+for node in r.childNodes():
+    if node.nodeType == X.XML_ELEMENT_NODE and node.nodeName == 'elem':
+        r.removeChild(node)
+print(r.toString())""", '<bug/>')
+case('perl_48_replaceNode_DTD_nodes_rt_80521', """
+s = '<!DOCTYPE crash [<!ATTLIST foo bar CDATA "baz">]><crash/>'
+src, dest = P.parse_string(s), P.parse_string(s)
+old = dest.firstChild; old.replaceNode(src.firstChild)
+print(dest.firstChild.nodeType == X.XML_DTD_NODE, old.parentNode, '<!ATTLIST' in dest.toString())
+del old, src; gc.collect(); print(dest.documentElement.nodeName)""", 'True None True\ncrash')
+
+# t/11memory.t: the loops for what exists today. The others go with their phase.
+MAKE_DOC = """
+def make_doc():
+    doc = X.Document('1.0', 'UTF-8')
+    parent = doc.createElement('p'); doc.setDocumentElement(parent)
+    parent.setAttribute('xmlns:param', 'http://axkit.org/XSP/param')
+    elem = doc.createElementNS('http://axkit.org/XSP/param', 'param:foo')
+    parent.appendChild(elem); parent = elem; parent = parent.parentNode
+    return doc
+"""
+case('leak_11memory_make_doc', MAKE_DOC + "print(grows(lambda: make_doc().toString(), 200000))", 'False')
+case('leak_11memory_appendChild', """
+def f():
+    e = X.Element('foo'); e.appendChild(X.Element('bar')); return e.toString()
+print(grows(f, 200000))""", 'False')
+case('leak_11memory_parsers', "print(grows(X.Parser, 400000))", 'False')
+case('leak_11memory_parse', """
+print(grows(lambda: X.Parser().parse_string('<sometag>foo</sometag>'), 200000))""", 'False')
+case('leak_11memory_failed_parse', """
+print(grows(lambda: raises(X.Error, lambda: P.parse_string('<sometag>foo</somtag>')), 200000))""",
+     'False')
+case('leak_11memory_replace_root', """
+d = X.Document()
+print(grows(lambda: d.setDocumentElement(d.createElement('x')), 400000))""", 'False')
+case('leak_11memory_root_from_other_document', """
+d = X.Document()
+def f():
+    other = X.Document(); a = other.createElement('A'); a.appendChild(other.createElement('B'))
+    d.setDocumentElement(a)
+print(grows(f, 200000))""", 'False')
+case('leak_11memory_find', """
+d = P.parse_string('<foo><bar><foo/></bar></foo>')
+print(grows(lambda: d.find('/foo/bar/foo'), 400000))""", 'False')
+case('leak_11memory_process_message', """
+s = '<d><s name="a"><h>1</h></s><s name="b"><h>2</h></s></d>'
+def f():
+    d = P.parse_string(s); e = d.documentElement; return d.findnodes('/d/s').to_literal()
+print(grows(f, 200000))""", 'False')
+case('leak_detached_tree', """
+d = P.parse_string('<a/>')
+def f():
+    e = d.createElement('x'); e.appendChild(d.createTextNode('t')); e.setAttribute('a', 'v')
+    return e.firstChild.nodeName
+print(grows(f, 200000))""", 'False')
+case('leak_standalone_nodes', """
+print(grows(lambda: (X.Element('a'), X.Text('t'), X.Attr('a', 'b'), X.DocumentFragment()), 200000))""",
+     'False')
+
+# ---------------------------------------------------------------- DTD safety
+
+DTD = "d = X.Parser(expand_entities=0).parse_string('<!DOCTYPE a [<!ELEMENT a ANY><!ENTITY e \"v\">]><a>&e;</a>')\n"
+case('declaration_stays_in_dtd', DTD + """
+dtd = d.firstChild; decl = dtd.firstChild
+print(raises(X.Error, lambda: dtd.removeChild(decl)), raises(X.Error, decl.unbindNode))""",
+     'True True')
+case('dtd_children_cannot_be_cleared', DTD + "print(raises(X.Error, d.firstChild.removeChildNodes))", 'True')
+case('entity_ref_children_cannot_be_cleared', DTD + """
+ref = d.documentElement.firstChild
+print(ref.nodeType == X.XML_ENTITY_REF_NODE, raises(X.Error, ref.removeChildNodes),
+      raises(X.Error, ref.normalize), d.documentElement.toString())""", 'True True True <a>&e;</a>')
+case('dtd_removed_and_freed', DTD + """
+dtd = d.firstChild; d.removeChild(dtd); del dtd; gc.collect()
+print('<!DOCTYPE' in d.toString(), d.documentElement.nodeName)""", 'False a')
 
 # ---------------------------------------------------------------- phase 2
 
 case('hierarchy_append_self', """
 d = P.parse_string('<a/>'); r = d.documentElement
-print(raises(X.Error, lambda: r.appendChild(r)), d.documentElement.nodeName)""", 'True a', 2)
+print(raises(X.Error, lambda: r.appendChild(r)), d.documentElement.nodeName)""", 'True a')
 case('hierarchy_append_ancestor', """
 d = P.parse_string('<a><b/></a>'); r = d.documentElement
-print(raises(X.Error, lambda: r.firstChild.appendChild(r)), r.toString())""", 'True <a><b/></a>', 2)
+print(raises(X.Error, lambda: r.firstChild.appendChild(r)), r.toString())""", 'True <a><b/></a>')
 case('hierarchy_append_document', """
 r = P.parse_string('<a/>').documentElement; d2 = P.parse_string('<b/>')
-print(raises(X.Error, lambda: r.appendChild(d2)), r.toString())""", 'True <a/>', 2)
+print(raises(X.Error, lambda: r.appendChild(d2)), r.toString())""", 'True <a/>')
 case('hierarchy_two_roots', """
 d = P.parse_string('<a/>'); print(raises(X.Error, lambda: d.appendChild(d.createElement('b'))))""",
-     'True', 2)
+     'True')
 case('hierarchy_child_of_text', """
 d = P.parse_string('<a>x</a>'); t = d.documentElement.firstChild
-print(raises(X.Error, lambda: t.appendChild(d.createElement('b'))))""", 'True', 2)
+print(raises(X.Error, lambda: t.appendChild(d.createElement('b'))))""", 'True')
 case('insertBefore_None_appends', """
 d = P.parse_string('<a><b/></a>'); r = d.documentElement
-r.insertBefore(d.createElement('c'), None); print(r.toString())""", '<a><b/><c/></a>', 2)
+r.insertBefore(d.createElement('c'), None); print(r.toString())""", '<a><b/><c/></a>')
 case('insertBefore_fragment_inlined', """
 d = P.parse_string('<a><b/></a>'); r = d.documentElement; f = d.createDocumentFragment()
 f.appendChild(d.createElement('x')); f.appendChild(d.createElement('y'))
 r.insertBefore(f, r.firstChild); print([n.nodeName for n in r.childNodes()])""",
-     "['x', 'y', 'b']", 2)
+     "['x', 'y', 'b']")
 case('replaceChild_fragment_inlined', """
 d = P.parse_string('<a><b/></a>'); r = d.documentElement; f = d.createDocumentFragment()
 f.appendChild(d.createElement('x')); r.replaceChild(f, r.firstChild)
-print([n.nodeName for n in r.childNodes()])""", "['x']", 2)
+print([n.nodeName for n in r.childNodes()])""", "['x']")
 case('insertBefore_ref_not_child', """
 d = P.parse_string('<a><b/><c><d/></c></a>'); r = d.documentElement
 print(raises(X.Error, lambda: r.firstChild.insertBefore(d.createElement('z'), r.lastChild.firstChild)))""",
-     'True', 2)
+     'True')
 case('removeChild_keeps_ns', """
 r = P.parse_string('<r xmlns:p="u"><p:a/></r>').documentElement
-print(r.removeChild(r.firstChild).toString())""", '<p:a xmlns:p="u"/>', 2)
+print(r.removeChild(r.firstChild).toString())""", '<p:a xmlns:p="u"/>')
 case('move_keeps_ns', """
 r = P.parse_string('<r><s xmlns:p="u"><p:a/></s><t/></r>').documentElement
 s, t = r.childNodes(); t.appendChild(s.firstChild); r.removeChild(s); print(r.toString())""",
-     '<r><t><p:a xmlns:p="u"/></t></r>', 2)
+     '<r><t><p:a xmlns:p="u"/></t></r>')
 case('ns_not_dangling_after_parent_freed', """
 d = P.parse_string('<r><s xmlns:p="u"><p:a/></s></r>'); r = d.documentElement; s = r.firstChild
 a = s.firstChild; s.removeChild(a); r.removeChild(s); del s; gc.collect()
 for i in range(100): X.Element('x', 'http://aaaaaaaaaaaaaaa')
-print(a.namespaceURI, a.prefix)""", 'u p', 2)
+print(a.namespaceURI, a.prefix)""", 'u p')
+case('insertBefore_attribute_as_reference', """
+d = P.parse_string('<a x="1"/>'); r = d.documentElement
+print(raises(X.Error, lambda: r.insertBefore(d.createElement('b'), r.getAttributeNode('x'))),
+      raises(X.Error, lambda: r.insertAfter(d.createElement('b'), r.getAttributeNode('x'))),
+      r.toString())""", 'True True <a x="1"/>')
+case('adoptNode_fragment', """
+d = P.parse_string('<r/>'); f = P.parse_balanced_chunk('<a b="1"/>text<c/>'); d.adoptNode(f)
+gc.collect(); print([n.nodeName for n in f.childNodes()]); d.documentElement.appendChild(f)
+print(d.documentElement.toString())""", "['a', '#text', 'c']\n<r><a b=\"1\"/>text<c/></r>")
+case('detached_attr_keeps_ns', """
+d = P.parse_string('<r xmlns:p="u" p:a="1"/>'); r = d.documentElement; a = r.getAttributeNode('p:a')
+r.removeAttributeNode(a); r.setNamespaceDeclURI('p', None); del r; gc.collect()
+print(a.namespaceURI, a.prefix)
+e = d.createElement('e'); e.setAttributeNode(a); print(e.toString())""", 'u p\n<e xmlns:p="u" p:a="1"/>')
+case('foreign_ns_declared_once', """
+d = P.parse_string('<r xmlns:p="u" p:a="1" p:b="2"/>'); r = d.documentElement; x = d.createElement('x')
+a, b = r.getAttributeNode('p:a'), r.getAttributeNode('p:b')
+x.setAttributeNode(a); x.setAttributeNode(b); print(x.toString())""", '<x xmlns:p="u" p:a="1" p:b="2"/>')
+case('ns_prefix_conflict_renamed', """
+d = P.parse_string('<r xmlns:p="u" p:a="1"/>'); r = d.documentElement
+x = P.parse_string('<x xmlns:p="v" p:b="2"/>').documentElement
+x.setAttributeNode(d.documentElement.getAttributeNode('p:a'))
+print(x.getAttributeNS('u', 'a'), x.getAttributeNS('v', 'b'))""", '1 2')
 case('setNamespaceDeclURI_grandchild', """
 r = P.parse_string('<r xmlns:p="u"><a><p:b/></a></r>').documentElement
 r.setNamespaceDeclURI('p', None)
 for i in range(100): X.Element('x', 'http://aaaaaaaaaaaaaaa')
-print(r.toString())""", '<r><a><b/></a></r>', 2, False)
+print(r.toString())""", '<r><a><b/></a></r>')
 case('setAttribute_xmlns_stays_on_child', """
 r = P.parse_string('<r xmlns="u"><c/></r>').documentElement
 r.firstChild.setAttribute('xmlns', 'v'); print(r.toString())""", '<r xmlns="u"><c xmlns="v"/></r>', 2)
@@ -250,7 +354,7 @@ r = P.parse_string('<r xmlns:p="u"/>').documentElement
 r.setAttributeNS('v', 'p:a', '1'); print(r.getAttributeNS('v', 'a'))""", '1', 2)
 case('removeAttribute_qualified', """
 r = P.parse_string('<r xmlns:p="u" p:a="1"/>').documentElement
-r.removeAttribute('p:a'); print(r.hasAttribute('p:a'))""", 'False', 2)
+r.removeAttribute('p:a'); print(r.hasAttribute('p:a'))""", 'False')
 case('hasAttribute_xmlns', """
 print(P.parse_string('<r xmlns:p="u"/>').documentElement.hasAttribute('xmlns:p'))""", 'True', 2)
 case('xpath_prefix_from_document', """
@@ -271,13 +375,13 @@ case('getChildrenByTagName_qualified', PFXNS +
 case('getChildrenByTagNameNS_star', PFXNS + "print(len(r.getChildrenByTagNameNS('*', 'c')))", '1', 2)
 case('textContent_is_raw_text', """
 r = P.parse_string('<a/>').documentElement; r.textContent = 'x & y <z> &amp;'
-print(r.textContent)""", 'x & y <z> &amp;', 2)
+print(r.textContent)""", 'x & y <z> &amp;')
 case('attr_nodeValue_is_raw_text', """
 at = P.parse_string('<a b="1"/>').documentElement.getAttributeNode('b'); at.nodeValue = 'x&y'
-print(at.value)""", 'x&y', 2)
+print(at.value)""", 'x&y')
 case('attr_textContent_is_raw_text', """
 at = P.parse_string('<a b="1"/>').documentElement.getAttributeNode('b'); at.textContent = 'x&y'
-print(at.value)""", 'x&y', 2)
+print(at.value)""", 'x&y')
 case('appendWellBalancedChunk_parses', """
 r = P.parse_string('<a/>').documentElement; r.appendWellBalancedChunk('<b>t</b><c/>')
 print([n.nodeName for n in r.childNodes()])""", "['b', 'c']", 2)
@@ -302,7 +406,7 @@ r = P.parse_string('<a/>').documentElement; print(raises(X.Error, lambda: r.setA
 ENTITY = '<!DOCTYPE a [<!ENTITY e "v">]><a>&e;</a>'
 case('expand_entities_off', """
 print(X.Parser(expand_entities=0).parse_string(%r).documentElement.toString())""" % ENTITY,
-     '<a>&e;</a>', 3)
+     '<a>&e;</a>')
 case('xxe_refused_by_default', """
 import tempfile
 f = tempfile.NamedTemporaryFile('w', suffix='.txt'); f.write('SECRET'); f.flush()
@@ -349,7 +453,7 @@ t = threading.Thread(target=w); t.start(); t.join(); print('libxml2 error' not i
 case('stale_after_change_in_thread', STALE + """
 import threading
 t = threading.Thread(target=lambda: setattr(r, 'textContent', 'x')); t.start(); t.join()
-print(k.nodeName)""", 'b', 3, False)
+print(k.nodeName)""", 'b')
 
 # ---------------------------------------------------------------- phase 4
 
@@ -372,7 +476,7 @@ x.registerFunction('f', lambda k=k: 1); del x; gc.collect(); print(sys.getrefcou
      '0', 4)
 case('xpath_context_node_kept_after_change', """
 d = P.parse_string('<a><b/></a>'); b = d.documentElement.firstChild; x = X.XPathContext(b)
-d.documentElement.removeChildNodes(); print(len(x.findnodes('.')))""", '1', 4)
+d.documentElement.removeChildNodes(); print(len(x.findnodes('.')))""", '1')
 case('xpath_context_node_kept_after_drop', """
 d = P.parse_string('<a><b/></a>'); r = d.documentElement; b = r.removeChild(r.firstChild)
 x = X.XPathContext(b); del b; gc.collect(); print(x.getContextNode().nodeName)""", 'b', 4)
@@ -388,10 +492,10 @@ print(grows(r.getNamespaces, 400000))""", 'False', 4)
 case('leak_adoptNode', """
 d = X.Document()
 print(grows(lambda: d.adoptNode(P.parse_string('<a>' + 'x' * 200 + '</a>').documentElement)))""",
-     'False', 4)
+     'False')
 case('leak_createAttributeNS', """
 d = X.Document(); print(grows(lambda: d.createAttributeNS('u' * 33, 'p:a', 'v'), 400000))""",
-     'False', 4)
+     'False')
 case('leak_control_parse', """
 print(grows(lambda: P.parse_string('<a><b c="1">t</b></a>').documentElement.firstChild.nodeName))""",
      'False')

@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include "libxml_document.h"
 #include "libxml_utils.h"
+#include "libxml_tree.h"
 #include "libxml_nodelist.h"
 #include "libxml_element.h"
 #include "libxml_text.h"
@@ -15,27 +16,17 @@ LibXML_Document_dealloc(LibXML_NodeObject *self)
 {
     PyObject_GC_UnTrack(self);
     if (self->node != NULL) {
-        xmlNodePtr doc_node = self->node;
-
-        /* Disconnect *this* wrapper from the document's priv struct without
-         * nulling self->node — we still need it valid for xmlFreeDoc below. */
-        LibXML_NodePrivate *priv = (LibXML_NodePrivate *)doc_node->_private;
-        if (priv && priv->wrapper == (PyObject *)self) {
-            priv->wrapper = NULL;
-            if (priv->cargo == NULL) {
-                free(priv);
-                doc_node->_private = NULL;
-            }
-        }
-
-        /* Clear priv structs for all child nodes and attributes.
-         * Their Python wrappers (if any) may outlive the document — null out
-         * their node pointer so they can't access freed memory. */
-        LibXML_clear_private_children(doc_node);
+        xmlDocPtr doc = (xmlDocPtr)self->node;
         self->node = NULL;
-        xmlFreeDoc((xmlDocPtr)doc_node);
+
+        /* Every wrapper of this document held a reference to it, so only the
+         * private structs of nodes with cargo can remain. */
+        LibXML_clear_private((xmlNodePtr)doc);
+        if (doc->extSubset)
+            LibXML_clear_private((xmlNodePtr)doc->extSubset);
+        xmlFreeDoc(doc);
     }
-    /* doc_obj is always NULL for Document */
+    /* doc_obj and owner are always NULL for Document */
     Py_TYPE(self)->tp_free((PyObject *)self);
 }
 
@@ -64,8 +55,7 @@ LibXML_Document_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
         doc->encoding = xmlStrdup(BAD_CAST encoding);
     }
 
-    /* Wrap: doc_obj = NULL because this IS the document */
-    return LibXML_Node_Wrap((xmlNodePtr)doc, NULL);
+    return LibXML_Node_Wrap((xmlNodePtr)doc);
 }
 
 /* ------------------------------------------------------------------ */
@@ -77,7 +67,7 @@ doc_get_documentElement(LibXML_NodeObject *self, void *closure)
 {
     xmlNodePtr root = xmlDocGetRootElement(LibXML_DOC(self));
     if (root == NULL) Py_RETURN_NONE;
-    return LibXML_Node_Wrap(root, (PyObject *)self);
+    return LibXML_Node_Wrap(root);
 }
 
 static int
@@ -87,9 +77,7 @@ doc_set_documentElement(LibXML_NodeObject *self, PyObject *value, void *closure)
         PyErr_SetString(PyExc_TypeError, "expected a Node");
         return -1;
     }
-    LibXML_NodeObject *node = (LibXML_NodeObject *)value;
-    xmlDocSetRootElement(LibXML_DOC(self), node->node);
-    return 0;
+    return LibXML_set_root(LibXML_DOC(self), LibXML_NODE(value));
 }
 
 static PyObject *
@@ -192,8 +180,7 @@ doc_createElement(LibXML_NodeObject *self, PyObject *args)
         LibXML_raise_last_error();
         return NULL;
     }
-    PyObject *result = LibXML_Node_Wrap(node, (PyObject *)self);
-    if (result) ((LibXML_NodeObject *)result)->owned = 1;
+    PyObject *result = LibXML_Node_Wrap(node);
     return result;
 }
 
@@ -225,8 +212,7 @@ doc_createElementNS(LibXML_NodeObject *self, PyObject *args)
     xmlFree(prefix);
     xmlSetNs(node, ns);
 
-    PyObject *result = LibXML_Node_Wrap(node, (PyObject *)self);
-    if (result) ((LibXML_NodeObject *)result)->owned = 1;
+    PyObject *result = LibXML_Node_Wrap(node);
     return result;
 }
 
@@ -237,8 +223,7 @@ doc_createTextNode(LibXML_NodeObject *self, PyObject *args)
     if (!PyArg_ParseTuple(args, "s", &content)) return NULL;
     xmlNodePtr node = xmlNewDocText(LibXML_DOC(self), BAD_CAST content);
     if (node == NULL) { LibXML_raise_last_error(); return NULL; }
-    PyObject *result = LibXML_Node_Wrap(node, (PyObject *)self);
-    if (result) ((LibXML_NodeObject *)result)->owned = 1;
+    PyObject *result = LibXML_Node_Wrap(node);
     return result;
 }
 
@@ -249,8 +234,7 @@ doc_createComment(LibXML_NodeObject *self, PyObject *args)
     if (!PyArg_ParseTuple(args, "s", &content)) return NULL;
     xmlNodePtr node = xmlNewDocComment(LibXML_DOC(self), BAD_CAST content);
     if (node == NULL) { LibXML_raise_last_error(); return NULL; }
-    PyObject *result = LibXML_Node_Wrap(node, (PyObject *)self);
-    if (result) ((LibXML_NodeObject *)result)->owned = 1;
+    PyObject *result = LibXML_Node_Wrap(node);
     return result;
 }
 
@@ -262,8 +246,7 @@ doc_createCDATASection(LibXML_NodeObject *self, PyObject *args)
     xmlNodePtr node = xmlNewCDataBlock(LibXML_DOC(self), BAD_CAST content,
                                        (int)strlen(content));
     if (node == NULL) { LibXML_raise_last_error(); return NULL; }
-    PyObject *result = LibXML_Node_Wrap(node, (PyObject *)self);
-    if (result) ((LibXML_NodeObject *)result)->owned = 1;
+    PyObject *result = LibXML_Node_Wrap(node);
     return result;
 }
 
@@ -275,8 +258,7 @@ doc_createPI(LibXML_NodeObject *self, PyObject *args)
     xmlNodePtr node = xmlNewDocPI(LibXML_DOC(self), BAD_CAST target,
                                    data ? BAD_CAST data : NULL);
     if (node == NULL) { LibXML_raise_last_error(); return NULL; }
-    PyObject *result = LibXML_Node_Wrap(node, (PyObject *)self);
-    if (result) ((LibXML_NodeObject *)result)->owned = 1;
+    PyObject *result = LibXML_Node_Wrap(node);
     return result;
 }
 
@@ -285,8 +267,7 @@ doc_createDocumentFragment(LibXML_NodeObject *self, PyObject *args)
 {
     xmlNodePtr node = xmlNewDocFragment(LibXML_DOC(self));
     if (node == NULL) { LibXML_raise_last_error(); return NULL; }
-    PyObject *result = LibXML_Node_Wrap(node, (PyObject *)self);
-    if (result) ((LibXML_NodeObject *)result)->owned = 1;
+    PyObject *result = LibXML_Node_Wrap(node);
     return result;
 }
 
@@ -308,8 +289,7 @@ doc_createAttribute(LibXML_NodeObject *self, PyObject *args)
             text->parent = (xmlNodePtr)attr;
         }
     }
-    PyObject *result = LibXML_Node_Wrap((xmlNodePtr)attr, (PyObject *)self);
-    if (result) ((LibXML_NodeObject *)result)->owned = 1;
+    PyObject *result = LibXML_Node_Wrap((xmlNodePtr)attr);
     return result;
 }
 
@@ -330,12 +310,10 @@ doc_createAttributeNS(LibXML_NodeObject *self, PyObject *args)
     /* Store the namespace URI in the attr's ns */
     xmlChar *prefix = colon ?
         xmlStrndup(BAD_CAST qname, (int)(colon - qname)) : NULL;
-    xmlNsPtr ns = xmlNewNs(NULL, BAD_CAST ns_uri, prefix);
+    attr->ns = LibXML_doc_ns(attr->doc, BAD_CAST ns_uri, prefix);
     xmlFree(prefix);
-    attr->ns = ns;
 
-    PyObject *result = LibXML_Node_Wrap((xmlNodePtr)attr, (PyObject *)self);
-    if (result) ((LibXML_NodeObject *)result)->owned = 1;
+    PyObject *result = LibXML_Node_Wrap((xmlNodePtr)attr);
     return result;
 }
 
@@ -427,7 +405,7 @@ doc_xpath_query(LibXML_NodeObject *self, const char *xpath_expr)
     xmlXPathFreeContext(ctx);
     if (!xobj) { LibXML_raise_last_error(); return NULL; }
 
-    PyObject *result = LibXML_NodeList_FromNodeSet(xobj->nodesetval, (PyObject *)self);
+    PyObject *result = LibXML_NodeList_FromNodeSet(xobj->nodesetval);
     xmlXPathFreeObject(xobj);
     return result;
 }
@@ -465,7 +443,7 @@ doc_getElementsByTagNameNS(LibXML_NodeObject *self, PyObject *args)
         xmlXPathObjectPtr xobj = xmlXPathEvalExpression(BAD_CAST xpath, ctx);
         xmlXPathFreeContext(ctx);
         if (!xobj) { LibXML_raise_last_error(); return NULL; }
-        PyObject *result = LibXML_NodeList_FromNodeSet(xobj->nodesetval, (PyObject *)self);
+        PyObject *result = LibXML_NodeList_FromNodeSet(xobj->nodesetval);
         xmlXPathFreeObject(xobj);
         return result;
     }
@@ -480,7 +458,7 @@ doc_getElementsByTagNameNS(LibXML_NodeObject *self, PyObject *args)
         xmlXPathObjectPtr xobj = xmlXPathEvalExpression(BAD_CAST xpath, ctx);
         xmlXPathFreeContext(ctx);
         if (!xobj) { LibXML_raise_last_error(); return NULL; }
-        PyObject *result = LibXML_NodeList_FromNodeSet(xobj->nodesetval, (PyObject *)self);
+        PyObject *result = LibXML_NodeList_FromNodeSet(xobj->nodesetval);
         xmlXPathFreeObject(xobj);
         return result;
     }
@@ -500,7 +478,7 @@ doc_getElementsByTagNameNS(LibXML_NodeObject *self, PyObject *args)
     xmlXPathFreeContext(ctx);
     if (!xobj) { LibXML_raise_last_error(); return NULL; }
 
-    PyObject *result = LibXML_NodeList_FromNodeSet(xobj->nodesetval, (PyObject *)self);
+    PyObject *result = LibXML_NodeList_FromNodeSet(xobj->nodesetval);
     xmlXPathFreeObject(xobj);
     return result;
 }
@@ -529,7 +507,7 @@ doc_getElementById(LibXML_NodeObject *self, PyObject *args)
 
     xmlAttrPtr attr = xmlGetID(LibXML_DOC(self), BAD_CAST id);
     if (attr == NULL || attr->parent == NULL) Py_RETURN_NONE;
-    return LibXML_Node_Wrap(attr->parent, (PyObject *)self);
+    return LibXML_Node_Wrap(attr->parent);
 }
 
 /* ------------------------------------------------------------------ */
@@ -547,8 +525,7 @@ doc_importNode(LibXML_NodeObject *self, PyObject *args)
     xmlNodePtr imported = xmlDocCopyNode(node->node, LibXML_DOC(self), deep ? 2 : 1);
     if (imported == NULL) { LibXML_raise_last_error(); return NULL; }
 
-    PyObject *result = LibXML_Node_Wrap(imported, (PyObject *)self);
-    if (result) ((LibXML_NodeObject *)result)->owned = 1;
+    PyObject *result = LibXML_Node_Wrap(imported);
     return result;
 }
 
@@ -558,12 +535,7 @@ doc_adoptNode(LibXML_NodeObject *self, PyObject *args)
     LibXML_NodeObject *node;
     if (!PyArg_ParseTuple(args, "O!", &LibXML_NodeType, &node)) return NULL;
 
-    xmlUnlinkNode(node->node);
-    xmlSetTreeDoc(node->node, LibXML_DOC(self));
-    /* Reconcile namespace declarations so the adopted node is self-contained */
-    xmlReconciliateNs(LibXML_DOC(self), node->node);
-    LibXML_update_doc_refs(node->node, (PyObject *)self);
-    node->owned = 0;
+    if (LibXML_adopt_node(node->node, LibXML_DOC(self)) < 0) return NULL;
 
     Py_INCREF(node);
     return (PyObject *)node;
@@ -633,13 +605,7 @@ doc_setDocumentElement(LibXML_NodeObject *self, PyObject *args)
 {
     LibXML_NodeObject *node;
     if (!PyArg_ParseTuple(args, "O!", &LibXML_NodeType, &node)) return NULL;
-    xmlDocPtr doc = LibXML_DOC(self);
-    xmlUnlinkNode(node->node);
-    if (node->node->doc != doc)
-        xmlSetTreeDoc(node->node, doc);
-    LibXML_update_doc_refs(node->node, (PyObject *)self);
-    xmlDocSetRootElement(doc, node->node);
-    node->owned = 0;
+    if (LibXML_set_root(LibXML_DOC(self), node->node) < 0) return NULL;
     Py_RETURN_NONE;
 }
 
@@ -684,19 +650,9 @@ doc_cloneNode(LibXML_NodeObject *self, PyObject *args)
         return NULL;
     }
 
-    /* Wrap clone as a new Document (no doc_obj since it IS the doc) */
-    LibXML_NodeObject *result =
-        (LibXML_NodeObject *)LibXML_DocumentType.tp_alloc(&LibXML_DocumentType, 0);
-    if (!result) { xmlFreeDoc(clone); return NULL; }
-    result->node    = (xmlNodePtr)clone;
-    result->owned   = 1;
-    result->doc_obj = NULL;
-    /* Store wrapper in LibXML_NodePrivate struct */
-    LibXML_NodePrivate *priv = (LibXML_NodePrivate *)calloc(1, sizeof(LibXML_NodePrivate));
-    if (!priv) { Py_DECREF(result); xmlFreeDoc(clone); return PyErr_NoMemory(); }
-    priv->wrapper   = (PyObject *)result;
-    clone->_private = priv;
-    return (PyObject *)result;
+    PyObject *result = LibXML_Node_Wrap((xmlNodePtr)clone);
+    if (result == NULL) xmlFreeDoc(clone);
+    return result;
 }
 
 /* ------------------------------------------------------------------ */

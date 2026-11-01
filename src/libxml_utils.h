@@ -17,29 +17,14 @@ typedef struct {
 } LibXML_NodePrivate;
 
 /*
- * Wrap an xmlNodePtr into the appropriate Python type.
- * Reuses existing wrapper via priv->wrapper cache.
- * doc_obj: strong ref to the owning Document Python object (NULL if wrapping a doc itself).
+ * Wrap a node. Reuses the live wrapper if there is one. The ownership rules
+ * are in libxml_tree.h. A namespace declaration is not a node: use
+ * LibXML_Namespace_Copy.
  */
-PyObject *LibXML_Node_Wrap(xmlNodePtr node, PyObject *doc_obj);
+PyObject *LibXML_Node_Wrap(xmlNodePtr node);
 
-/*
- * Wrap a private copy of a namespace declaration. The wrapper owns the copy,
- * so it stays valid after the element or XPath result it came from is freed.
- */
-PyObject *LibXML_Ns_WrapCopy(xmlNsPtr orig, PyObject *doc_obj);
-
-/* Node deregister callback — install via xmlDeregisterNodeDefault() at module init */
-void LibXML_node_deregister(xmlNodePtr node);
-
-/* Clear _private structs recursively (used before xmlFreeDoc) */
-void LibXML_clear_private_recursive(xmlNodePtr node);
-
-/* Same but skips the root node itself (used by Document dealloc) */
-void LibXML_clear_private_children(xmlNodePtr root);
-
-/* Update doc_obj refs recursively when a subtree moves to a new document */
-void LibXML_update_doc_refs(xmlNodePtr node, PyObject *new_doc_obj);
+/* New hidden document, for nodes created without one. Returns its wrapper. */
+PyObject *LibXML_new_hidden_doc(void);
 
 /* Raise a Python exception from the last libxml2 error */
 void LibXML_raise_last_error(void);

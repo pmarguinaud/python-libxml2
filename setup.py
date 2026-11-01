@@ -28,6 +28,8 @@ libxml_ext = Extension(
     sources=[
         'src/libxml_module.c',
         'src/libxml_utils.c',
+        'src/libxml_tree.c',
+        'src/libxml_namespace.c',
         'src/libxml_node.c',
         'src/libxml_document.c',
         'src/libxml_element.c',

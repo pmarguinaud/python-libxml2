@@ -1,5 +1,6 @@
 #include "libxml_nodelist.h"
 #include "libxml_utils.h"
+#include "libxml_namespace.h"
 
 /* ------------------------------------------------------------------ */
 /* Allocation / deallocation                                           */
@@ -22,7 +23,7 @@ LibXML_NodeList_dealloc(LibXML_NodeListObject *self)
 /* ------------------------------------------------------------------ */
 
 PyObject *
-LibXML_NodeList_FromNodeSet(xmlNodeSetPtr ns, PyObject *doc_obj)
+LibXML_NodeList_FromNodeSet(xmlNodeSetPtr ns)
 {
     LibXML_NodeListObject *list =
         (LibXML_NodeListObject *)LibXML_NodeListType.tp_alloc(&LibXML_NodeListType, 0);
@@ -46,9 +47,9 @@ LibXML_NodeList_FromNodeSet(xmlNodeSetPtr ns, PyObject *doc_obj)
         /* Namespace nodes from XPath are temporary copies freed with the
          * XPath result object, so each wrapper needs its own copy. */
         if (n && n->type == XML_NAMESPACE_DECL)
-            list->nodes[i] = LibXML_Ns_WrapCopy((xmlNsPtr)n, doc_obj);
+            list->nodes[i] = LibXML_Namespace_Copy((xmlNsPtr)n);
         else
-            list->nodes[i] = LibXML_Node_Wrap(n, doc_obj);
+            list->nodes[i] = LibXML_Node_Wrap(n);
         if (!list->nodes[i]) {
             /* Clear what we've set so far */
             for (Py_ssize_t j = 0; j < i; j++) Py_XDECREF(list->nodes[j]);
@@ -62,7 +63,7 @@ LibXML_NodeList_FromNodeSet(xmlNodeSetPtr ns, PyObject *doc_obj)
 }
 
 PyObject *
-LibXML_NodeList_FromNodePtr(xmlNodePtr first, PyObject *doc_obj)
+LibXML_NodeList_FromNodePtr(xmlNodePtr first)
 {
     /* Count */
     Py_ssize_t count = 0;
@@ -87,7 +88,7 @@ LibXML_NodeList_FromNodePtr(xmlNodePtr first, PyObject *doc_obj)
 
     n = first;
     for (Py_ssize_t i = 0; i < count; i++) {
-        list->nodes[i] = LibXML_Node_Wrap(n, doc_obj);
+        list->nodes[i] = LibXML_Node_Wrap(n);
         if (!list->nodes[i]) {
             for (Py_ssize_t j = 0; j < i; j++) Py_XDECREF(list->nodes[j]);
             PyMem_Free(list->nodes);

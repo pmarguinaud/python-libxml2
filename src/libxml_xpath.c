@@ -8,11 +8,11 @@
 /* ------------------------------------------------------------------ */
 
 PyObject *
-LibXML_xpath_to_python(xmlXPathObjectPtr xobj, PyObject *doc_obj)
+LibXML_xpath_to_python(xmlXPathObjectPtr xobj)
 {
     switch (xobj->type) {
         case XPATH_NODESET:
-            return LibXML_NodeList_FromNodeSet(xobj->nodesetval, doc_obj);
+            return LibXML_NodeList_FromNodeSet(xobj->nodesetval);
         case XPATH_BOOLEAN:
             return PyBool_FromLong(xobj->boolval);
         case XPATH_NUMBER:
@@ -293,9 +293,9 @@ xpc_findnodes(LibXML_XPathContextObject *self, PyObject *args)
 
     PyObject *result;
     if (xobj->type == XPATH_NODESET)
-        result = LibXML_NodeList_FromNodeSet(xobj->nodesetval, self->doc_obj);
+        result = LibXML_NodeList_FromNodeSet(xobj->nodesetval);
     else
-        result = LibXML_NodeList_FromNodeSet(NULL, self->doc_obj);
+        result = LibXML_NodeList_FromNodeSet(NULL);
     xmlXPathFreeObject(xobj);
     return result;
 }
@@ -318,7 +318,7 @@ xpc_find(LibXML_XPathContextObject *self, PyObject *args)
     if (self->ctx) self->ctx->node = saved;
     if (!xobj) return NULL;
 
-    PyObject *result = LibXML_xpath_to_python(xobj, self->doc_obj);
+    PyObject *result = LibXML_xpath_to_python(xobj);
     xmlXPathFreeObject(xobj);
     return result;
 }
@@ -429,7 +429,7 @@ static PyObject *
 xpc_getContextNode(LibXML_XPathContextObject *self, PyObject *args)
 {
     if (!self->ctx || !self->ctx->node) Py_RETURN_NONE;
-    return LibXML_Node_Wrap(self->ctx->node, self->doc_obj);
+    return LibXML_Node_Wrap(self->ctx->node);
 }
 
 /* ------------------------------------------------------------------ */
@@ -454,7 +454,7 @@ xpc_python_function(xmlXPathParserContextPtr ctxt, int nargs)
     PyObject *py_args = PyTuple_New(nargs);
     for (int i = nargs - 1; i >= 0; i--) {
         xmlXPathObjectPtr xobj = valuePop(ctxt);
-        PyObject *val = LibXML_xpath_to_python(xobj, NULL);
+        PyObject *val = LibXML_xpath_to_python(xobj);
         xmlXPathFreeObject(xobj);
         PyTuple_SET_ITEM(py_args, i, val);
     }

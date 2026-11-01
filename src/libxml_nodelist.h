@@ -17,10 +17,10 @@ typedef struct {
 extern PyTypeObject LibXML_NodeListType;
 
 /* Build a NodeList from an xmlNodeSetPtr (XPath nodeset result) */
-PyObject *LibXML_NodeList_FromNodeSet(xmlNodeSetPtr ns, PyObject *doc_obj);
+PyObject *LibXML_NodeList_FromNodeSet(xmlNodeSetPtr ns);
 
 /* Build a NodeList from a linked list of xmlNodePtr (children, siblings) */
-PyObject *LibXML_NodeList_FromNodePtr(xmlNodePtr first, PyObject *doc_obj);
+PyObject *LibXML_NodeList_FromNodePtr(xmlNodePtr first);
 
 #define LibXML_NodeList_Check(op)  PyObject_TypeCheck((op), &LibXML_NodeListType)
 

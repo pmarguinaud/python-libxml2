@@ -1,5 +1,6 @@
 #include "libxml_attr.h"
 #include "libxml_utils.h"
+#include "libxml_tree.h"
 #include "libxml_document.h"
 
 /* ------------------------------------------------------------------ */
@@ -15,10 +16,19 @@ LibXML_Attr_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "s|s", kwlist, &name, &value))
         return NULL;
 
-    xmlAttrPtr attr = xmlNewProp(NULL, BAD_CAST name, BAD_CAST value);
-    if (!attr) { PyErr_NoMemory(); return NULL; }
-    PyObject *result = LibXML_Node_Wrap((xmlNodePtr)attr, NULL);
-    if (result) ((LibXML_NodeObject *)result)->owned = 1;
+    PyObject *doc = LibXML_new_hidden_doc();
+    if (doc == NULL) return NULL;
+
+    xmlAttrPtr attr = xmlNewDocProp((xmlDocPtr)LibXML_NODE(doc), BAD_CAST name, NULL);
+    if (attr == NULL) {
+        Py_DECREF(doc);
+        return PyErr_NoMemory();
+    }
+    LibXML_set_text((xmlNodePtr)attr, value);
+
+    PyObject *result = LibXML_Node_Wrap((xmlNodePtr)attr);
+    if (result == NULL) xmlFreeNode((xmlNodePtr)attr);
+    Py_DECREF(doc);
     return result;
 }
 
@@ -54,18 +64,7 @@ attr_set_value(LibXML_NodeObject *self, PyObject *value, void *closure)
     }
     const char *s = PyUnicode_AsUTF8(value);
     if (!s) return -1;
-    xmlAttrPtr attr = (xmlAttrPtr)self->node;
-    /* Free existing children */
-    xmlFreeNodeList(attr->children);
-    attr->children = attr->last = NULL;
-    if (attr->doc) {
-        xmlNodePtr txt = xmlNewDocText(attr->doc, BAD_CAST s);
-        if (txt) xmlAddChild(self->node, txt);
-    } else {
-        /* No document: just set on children directly */
-        xmlNodePtr txt = xmlNewText(BAD_CAST s);
-        if (txt) xmlAddChild(self->node, txt);
-    }
+    LibXML_set_text(self->node, s);
     return 0;
 }
 
@@ -74,8 +73,7 @@ attr_get_ownerElement(LibXML_NodeObject *self, void *closure)
 {
     xmlAttrPtr attr = (xmlAttrPtr)self->node;
     if (!attr->parent) Py_RETURN_NONE;
-    return LibXML_Node_Wrap(attr->parent,
-        self->doc_obj ? self->doc_obj : (PyObject *)self);
+    return LibXML_Node_Wrap(attr->parent);
 }
 
 static PyObject *
@@ -133,7 +131,7 @@ attr_setNamespace(LibXML_NodeObject *self, PyObject *args)
         if (!ns) ns = xmlNewNs(attr->parent, BAD_CAST ns_uri,
                                prefix ? BAD_CAST prefix : NULL);
     } else {
-        ns = xmlNewNs(NULL, BAD_CAST ns_uri, prefix ? BAD_CAST prefix : NULL);
+        ns = LibXML_doc_ns(attr->doc, BAD_CAST ns_uri, BAD_CAST prefix);
     }
     attr->ns = ns;
     Py_RETURN_TRUE;

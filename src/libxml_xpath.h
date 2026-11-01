@@ -26,6 +26,6 @@ xmlXPathObjectPtr LibXML_xpath_eval(xmlXPathContextPtr ctx, const char *expr);
  *   number  → PyFloat
  *   string  → PyUnicode
  */
-PyObject *LibXML_xpath_to_python(xmlXPathObjectPtr xobj, PyObject *doc_obj);
+PyObject *LibXML_xpath_to_python(xmlXPathObjectPtr xobj);
 
 #endif /* LIBXML_XPATH_H */

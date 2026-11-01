@@ -244,16 +244,52 @@ static PyMethodDef chardata_methods[] = {
 /* Text tp_new                                                         */
 /* ------------------------------------------------------------------ */
 
+/* Create a node in a hidden document. make_node gets the document. */
+typedef xmlNodePtr (*make_node_fn)(xmlDocPtr doc, const char *a, const char *b);
+
+static PyObject *
+new_standalone(make_node_fn make_node, const char *a, const char *b)
+{
+    PyObject *doc = LibXML_new_hidden_doc();
+    if (doc == NULL) return NULL;
+
+    xmlNodePtr node = make_node((xmlDocPtr)LibXML_NODE(doc), a, b);
+    PyObject *result = node ? LibXML_Node_Wrap(node) : PyErr_NoMemory();
+    if (node && !result) xmlFreeNode(node);
+    Py_DECREF(doc);
+    return result;
+}
+
+static xmlNodePtr
+make_text(xmlDocPtr doc, const char *a, const char *b)
+{
+    return xmlNewDocText(doc, BAD_CAST a);
+}
+
+static xmlNodePtr
+make_comment(xmlDocPtr doc, const char *a, const char *b)
+{
+    return xmlNewDocComment(doc, BAD_CAST a);
+}
+
+static xmlNodePtr
+make_cdata(xmlDocPtr doc, const char *a, const char *b)
+{
+    return xmlNewCDataBlock(doc, BAD_CAST a, (int)strlen(a));
+}
+
+static xmlNodePtr
+make_pi(xmlDocPtr doc, const char *a, const char *b)
+{
+    return xmlNewDocPI(doc, BAD_CAST a, b ? BAD_CAST b : NULL);
+}
+
 static PyObject *
 LibXML_Text_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 {
     const char *content = "";
     if (!PyArg_ParseTuple(args, "|s", &content)) return NULL;
-    xmlNodePtr node = xmlNewText(BAD_CAST content);
-    if (!node) { PyErr_NoMemory(); return NULL; }
-    PyObject *result = LibXML_Node_Wrap(node, NULL);
-    if (result) ((LibXML_NodeObject *)result)->owned = 1;
-    return result;
+    return new_standalone(make_text, content, NULL);
 }
 
 static PyObject *
@@ -261,11 +297,7 @@ LibXML_Comment_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 {
     const char *content = "";
     if (!PyArg_ParseTuple(args, "|s", &content)) return NULL;
-    xmlNodePtr node = xmlNewComment(BAD_CAST content);
-    if (!node) { PyErr_NoMemory(); return NULL; }
-    PyObject *result = LibXML_Node_Wrap(node, NULL);
-    if (result) ((LibXML_NodeObject *)result)->owned = 1;
-    return result;
+    return new_standalone(make_comment, content, NULL);
 }
 
 static PyObject *
@@ -273,11 +305,7 @@ LibXML_CDATASection_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 {
     const char *content = "";
     if (!PyArg_ParseTuple(args, "|s", &content)) return NULL;
-    xmlNodePtr node = xmlNewCDataBlock(NULL, BAD_CAST content, (int)strlen(content));
-    if (!node) { PyErr_NoMemory(); return NULL; }
-    PyObject *result = LibXML_Node_Wrap(node, NULL);
-    if (result) ((LibXML_NodeObject *)result)->owned = 1;
-    return result;
+    return new_standalone(make_cdata, content, NULL);
 }
 
 static PyObject *
@@ -285,11 +313,7 @@ LibXML_PI_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 {
     const char *target, *data = NULL;
     if (!PyArg_ParseTuple(args, "s|s", &target, &data)) return NULL;
-    xmlNodePtr node = xmlNewPI(BAD_CAST target, data ? BAD_CAST data : NULL);
-    if (!node) { PyErr_NoMemory(); return NULL; }
-    PyObject *result = LibXML_Node_Wrap(node, NULL);
-    if (result) ((LibXML_NodeObject *)result)->owned = 1;
-    return result;
+    return new_standalone(make_pi, target, data);
 }
 
 /* PI-specific methods */
