@@ -10,6 +10,7 @@ from xml_libxml._libxml import (
     PI,
     Attr,
     Namespace,
+    Dtd,
     NodeList,
     XPathContext,
     XPathExpression,
@@ -50,9 +51,15 @@ from xml_libxml._libxml import (
     # Version info
     LIBXML_VERSION,
     LIBXML_DOTTED_VERSION,
+    LIBXML_RUNTIME_VERSION,
 )
 
-from xml_libxml import ErrNo
+from xml_libxml import Common, ErrNo
+from xml_libxml._dom import AttributeHash, NamedNodeMap
+from xml_libxml.Common import decodeFromUTF8, encodeToUTF8
+
+
+createDocument = Document.createDocument
 
 
 def load_xml(*args, **options):
@@ -68,9 +75,10 @@ def load_html(*args, **options):
 __version__ = '0.1.0'
 __all__ = [
     'Parser', 'Document', 'Node', 'Element', 'Text', 'Comment',
-    'CDATASection', 'PI', 'Attr', 'Namespace', 'NodeList', 'XPathContext', 'XPathExpression',
+    'CDATASection', 'PI', 'Attr', 'Namespace', 'Dtd', 'NodeList', 'XPathContext', 'XPathExpression',
     'Literal', 'Number', 'Boolean', 'DocumentFragment',
-    'Error', 'ErrNo', 'load_xml', 'load_html',
+    'Error', 'ErrNo', 'Common', 'load_xml', 'load_html', 'createDocument',
+    'AttributeHash', 'NamedNodeMap', 'encodeToUTF8', 'decodeFromUTF8',
     'XML_ELEMENT_NODE', 'XML_ATTRIBUTE_NODE', 'XML_TEXT_NODE',
     'XML_CDATA_SECTION_NODE', 'XML_ENTITY_REF_NODE', 'XML_ENTITY_NODE',
     'XML_PI_NODE', 'XML_COMMENT_NODE', 'XML_DOCUMENT_NODE',
@@ -79,5 +87,5 @@ __all__ = [
     'XML_ATTRIBUTE_DECL', 'XML_ENTITY_DECL', 'XML_NAMESPACE_DECL',
     'XML_XINCLUDE_START', 'XML_XINCLUDE_END',
     'XML_XML_NS', 'XML_XMLNS_NS',
-    'LIBXML_VERSION', 'LIBXML_DOTTED_VERSION',
+    'LIBXML_VERSION', 'LIBXML_DOTTED_VERSION', 'LIBXML_RUNTIME_VERSION',
 ]

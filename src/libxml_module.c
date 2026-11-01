@@ -9,6 +9,7 @@
 #include "libxml_xpath.h"
 #include "libxml_parser.h"
 #include "libxml_namespace.h"
+#include "libxml_dtd.h"
 
 PyObject *LibXML_Error = NULL;
 
@@ -32,6 +33,7 @@ PyInit__libxml(void)
     if (PyType_Ready(&LibXML_CDATASectionType) < 0) return NULL;
     if (PyType_Ready(&LibXML_PIType) < 0) return NULL;
     if (PyType_Ready(&LibXML_AttrType) < 0) return NULL;
+    if (PyType_Ready(&LibXML_DtdType) < 0) return NULL;
     if (PyType_Ready(&LibXML_NamespaceType) < 0) return NULL;
     if (PyType_Ready(&LibXML_XPathContextType) < 0) return NULL;
     if (PyType_Ready(&LibXML_XPathExpressionType) < 0) return NULL;
@@ -71,6 +73,7 @@ PyInit__libxml(void)
     ADD_TYPE("CDATASection",     LibXML_CDATASectionType)
     ADD_TYPE("PI",               LibXML_PIType)
     ADD_TYPE("Attr",             LibXML_AttrType)
+    ADD_TYPE("Dtd",              LibXML_DtdType)
     ADD_TYPE("Namespace",        LibXML_NamespaceType)
     ADD_TYPE("XPathContext",     LibXML_XPathContextType)
     ADD_TYPE("XPathExpression",  LibXML_XPathExpressionType)
@@ -119,6 +122,9 @@ PyInit__libxml(void)
 
     /* Version info */
     if (PyModule_AddIntConstant(m, "LIBXML_VERSION", LIBXML_VERSION) < 0) {
+        Py_DECREF(m); return NULL;
+    }
+    if (PyModule_AddStringConstant(m, "LIBXML_RUNTIME_VERSION", xmlParserVersion) < 0) {
         Py_DECREF(m); return NULL;
     }
     if (PyModule_AddStringConstant(m, "LIBXML_DOTTED_VERSION",

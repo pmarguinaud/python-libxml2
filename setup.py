@@ -30,6 +30,7 @@ libxml_ext = Extension(
         'src/libxml_utils.c',
         'src/libxml_tree.c',
         'src/libxml_namespace.c',
+        'src/libxml_dtd.c',
         'src/libxml_node.c',
         'src/libxml_document.c',
         'src/libxml_element.c',

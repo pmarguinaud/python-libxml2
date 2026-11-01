@@ -201,10 +201,15 @@ node_get_nodeValue(LibXML_NodeObject *self, void *closure)
     case XML_CDATA_SECTION_NODE:
     case XML_PI_NODE:
     case XML_ENTITY_REF_NODE:
+    case XML_ENTITY_DECL:
         break;
     default:
         Py_RETURN_NONE;
     }
+    /* An entity gets its child nodes when first referenced. */
+    if (self->node->type == XML_ENTITY_DECL && ((xmlEntityPtr)self->node)->content != NULL)
+        return PyUnicode_FromString((const char *)((xmlEntityPtr)self->node)->content);
+
     xmlChar *content = xmlNodeGetContent(self->node);
     if (content == NULL) Py_RETURN_NONE;
     PyObject *ret = PyUnicode_FromString((const char *)content);
@@ -339,11 +344,21 @@ node_hasChildNodes(LibXML_NodeObject *self, PyObject *args)
     return PyBool_FromLong(self->node->children != NULL);
 }
 
-/* The node a caller gets back: a fragment is replaced by its first child. */
+/* The node a caller gets back: a fragment gives its first child, and a DTD from
+ * another document is another node after the insertion, so take the wrapper. */
 static xmlNodePtr
-inserted_node(xmlNodePtr node)
+fragment_first(xmlNodePtr node)
 {
-    return node->type == XML_DOCUMENT_FRAG_NODE ? node->children : node;
+    return node->type == XML_DOCUMENT_FRAG_NODE ? node->children : NULL;
+}
+
+static PyObject *
+inserted_result(LibXML_NodeObject *node, xmlNodePtr first)
+{
+    if (first != NULL)
+        return LibXML_Node_Wrap(first);
+    Py_INCREF(node);
+    return (PyObject *)node;
 }
 
 static PyObject *
@@ -352,9 +367,9 @@ node_appendChild(LibXML_NodeObject *self, PyObject *args)
     LibXML_NodeObject *child;
     if (!PyArg_ParseTuple(args, "O!", &LibXML_NodeType, &child)) return NULL;
 
-    xmlNodePtr first = inserted_node(child->node);
+    xmlNodePtr first = fragment_first(child->node);
     if (LibXML_insert_node(child->node, self->node, NULL) < 0) return NULL;
-    return LibXML_Node_Wrap(first ? first : child->node);
+    return inserted_result(child, first);
 }
 
 /* Parse a reference node argument: a Node, or None for "at the end". */
@@ -383,9 +398,9 @@ node_insertBefore(LibXML_NodeObject *self, PyObject *args)
         return NULL;
     if (parse_ref_node(ref_obj, &ref) < 0) return NULL;
 
-    xmlNodePtr first = inserted_node(new_node->node);
+    xmlNodePtr first = fragment_first(new_node->node);
     if (LibXML_insert_node(new_node->node, self->node, ref) < 0) return NULL;
-    return LibXML_Node_Wrap(first);
+    return inserted_result(new_node, first);
 }
 
 static PyObject *
@@ -399,7 +414,7 @@ node_insertAfter(LibXML_NodeObject *self, PyObject *args)
     if (parse_ref_node(ref_obj, &ref) < 0) return NULL;
 
     xmlNodePtr newn = new_node->node;
-    xmlNodePtr first = inserted_node(newn);
+    xmlNodePtr first = fragment_first(newn);
 
     if (ref != newn) {
         xmlNodePtr before = NULL;
@@ -413,7 +428,7 @@ node_insertAfter(LibXML_NodeObject *self, PyObject *args)
         }
         if (LibXML_insert_node(newn, self->node, before) < 0) return NULL;
     }
-    return LibXML_Node_Wrap(first);
+    return inserted_result(new_node, first);
 }
 
 static PyObject *
@@ -484,7 +499,14 @@ node_cloneNode(LibXML_NodeObject *self, PyObject *args)
     if (!PyArg_ParseTuple(args, "|i", &deep)) return NULL;
 
     /* extended: 1 = recursive; 2 = properties and namespaces only */
-    xmlNodePtr clone = xmlDocCopyNode(self->node, self->node->doc, deep ? 1 : 2);
+    xmlNodePtr clone;
+    if (self->node->type == XML_DTD_NODE) {
+        clone = (xmlNodePtr)xmlCopyDtd((xmlDtdPtr)self->node);
+        if (clone != NULL)
+            xmlSetTreeDoc(clone, self->node->doc);
+    } else {
+        clone = xmlDocCopyNode(self->node, self->node->doc, deep ? 1 : 2);
+    }
     if (clone == NULL) {
         PyErr_SetString(LibXML_Error, "cloneNode failed");
         return NULL;
@@ -536,7 +558,7 @@ node_addSibling(LibXML_NodeObject *self, PyObject *args)
         return NULL;
     }
     if (LibXML_insert_node(newn, self->node->parent, NULL) < 0) return NULL;
-    return LibXML_Node_Wrap(newn);
+    return inserted_result(new_node, NULL);
 }
 
 /* Recursive normalize helper */
@@ -758,7 +780,12 @@ node_attributes(LibXML_NodeObject *self, PyObject *args)
 {
     /* Attributes first, then namespace declarations, as in Perl */
     PyObject *list = PyList_New(0);
-    if (list == NULL || self->node->type != XML_ELEMENT_NODE) return list;
+    if (list == NULL) return NULL;
+    if (self->node->type != XML_ELEMENT_NODE) {
+        PyObject *empty = LibXML_dom_call("NamedNodeMap", list, NULL);
+        Py_DECREF(list);
+        return empty;
+    }
 
     for (xmlAttrPtr attr = self->node->properties; attr; attr = attr->next) {
         PyObject *a = LibXML_Node_Wrap((xmlNodePtr)attr);
@@ -780,7 +807,10 @@ node_attributes(LibXML_NodeObject *self, PyObject *args)
         }
         Py_DECREF(a);
     }
-    return list;
+
+    PyObject *map = LibXML_dom_call("NamedNodeMap", list, NULL);
+    Py_DECREF(list);
+    return map;
 }
 
 static PyObject *
@@ -860,6 +890,160 @@ node_setCargo(LibXML_NodeObject *self, PyObject *args)
     Py_RETURN_NONE;
 }
 
+/* ------------------------------------------------------------------ */
+/* Blank text is skipped                                               */
+/* ------------------------------------------------------------------ */
+
+static PyObject *
+node_nonBlankChildNodes(LibXML_NodeObject *self, PyObject *args)
+{
+    xmlNodeSetPtr set = xmlXPathNodeSetCreate(NULL);
+    if (set == NULL) return PyErr_NoMemory();
+
+    for (xmlNodePtr c = self->node->children; c; c = c->next) {
+        if (!xmlIsBlankNode(c))
+            xmlXPathNodeSetAddUnique(set, c);
+    }
+    PyObject *result = LibXML_NodeList_FromNodeSet(set);
+    xmlXPathFreeNodeSet(set);
+    return result;
+}
+
+static PyObject *
+node_firstNonBlankChild(LibXML_NodeObject *self, PyObject *args)
+{
+    xmlNodePtr c = self->node->children;
+    while (c != NULL && xmlIsBlankNode(c)) c = c->next;
+    return LibXML_Node_Wrap(c);
+}
+
+static PyObject *
+node_nextNonBlankSibling(LibXML_NodeObject *self, PyObject *args)
+{
+    xmlNodePtr c = self->node->next;
+    while (c != NULL && xmlIsBlankNode(c)) c = c->next;
+    return LibXML_Node_Wrap(c);
+}
+
+static PyObject *
+node_previousNonBlankSibling(LibXML_NodeObject *self, PyObject *args)
+{
+    xmlNodePtr c = self->node->prev;
+    while (c != NULL && xmlIsBlankNode(c)) c = c->prev;
+    return LibXML_Node_Wrap(c);
+}
+
+/* ------------------------------------------------------------------ */
+/* Method forms of properties, as Perl names them                      */
+/* ------------------------------------------------------------------ */
+
+#define GETTER_METHOD(name, getter) \
+static PyObject * \
+node_##name(LibXML_NodeObject *self, PyObject *args) \
+{ \
+    return getter(self, NULL); \
+}
+
+GETTER_METHOD(getFirstChild, node_get_firstChild)
+GETTER_METHOD(getLastChild, node_get_lastChild)
+GETTER_METHOD(getNextSibling, node_get_nextSibling)
+GETTER_METHOD(getPreviousSibling, node_get_previousSibling)
+GETTER_METHOD(getParentNode, node_get_parentNode)
+GETTER_METHOD(getOwnerDocument, node_get_ownerDocument)
+GETTER_METHOD(getLocalName, node_get_localname)
+GETTER_METHOD(getPrefix, node_get_prefix)
+GETTER_METHOD(getType, node_get_nodeType)
+GETTER_METHOD(getNodeValue, node_get_nodeValue)
+
+/* The root of the tree of this node */
+static PyObject *
+node_get_ownerNode(LibXML_NodeObject *self, void *closure)
+{
+    PyObject *owner = self->owner ? self->owner : (PyObject *)self;
+    Py_INCREF(owner);
+    return owner;
+}
+
+GETTER_METHOD(getOwner, node_get_ownerNode)
+
+static PyObject *
+node_isSupported(LibXML_NodeObject *self, PyObject *args)
+{
+    const char *feature;
+    if (!PyArg_ParseTuple(args, "s", &feature)) return NULL;
+    return PyBool_FromLong(PyObject_HasAttrString((PyObject *)self, feature));
+}
+
+static PyObject *
+node_setRawName(LibXML_NodeObject *self, PyObject *args)
+{
+    const char *name;
+    if (!PyArg_ParseTuple(args, "s", &name)) return NULL;
+    xmlNodeSetName(self->node, BAD_CAST name);
+    Py_RETURN_NONE;
+}
+
+/* ------------------------------------------------------------------ */
+/* Canonical XML                                                       */
+/* ------------------------------------------------------------------ */
+
+static PyObject *
+node_c14n_call(LibXML_NodeObject *self, PyObject *args, PyObject *kwds, int mode)
+{
+    int comments = 0;
+    PyObject *xpath = Py_None, *xpc = Py_None;
+    static char *kwlist[] = {"comments", "xpath", "xpc", NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|iOO", kwlist, &comments, &xpath, &xpc))
+        return NULL;
+    return LibXML_node_c14n(self, comments, xpath, mode, Py_None, xpc);
+}
+
+static PyObject *
+node_toStringC14N(LibXML_NodeObject *self, PyObject *args, PyObject *kwds)
+{
+    return node_c14n_call(self, args, kwds, XML_C14N_1_0);
+}
+
+static PyObject *
+node_toStringC14N_v1_1(LibXML_NodeObject *self, PyObject *args, PyObject *kwds)
+{
+    return node_c14n_call(self, args, kwds, XML_C14N_1_1);
+}
+
+/* toStringEC14N(comments, xpath, xpc_or_prefixes, prefixes), as in Perl */
+static PyObject *
+node_toStringEC14N(LibXML_NodeObject *self, PyObject *args, PyObject *kwds)
+{
+    int comments = 0;
+    PyObject *xpath = Py_None, *xpc = Py_None, *prefixes = Py_None;
+    static char *kwlist[] = {"comments", "xpath", "xpc", "inclusive_prefix_list", NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|iOOO", kwlist, &comments, &xpath,
+                                     &xpc, &prefixes))
+        return NULL;
+
+    if (xpc != Py_None && !PyObject_TypeCheck(xpc, &LibXML_XPathContextType)) {
+        if (prefixes != Py_None) {
+            PyErr_SetString(LibXML_Error,
+                            "toStringEC14N: 3rd argument is not an XPathContext");
+            return NULL;
+        }
+        prefixes = xpc;
+        xpc = Py_None;
+    }
+    return LibXML_node_c14n(self, comments, xpath, XML_C14N_EXCLUSIVE_1_0, prefixes, xpc);
+}
+
+/* int(node), as 0+$node in Perl */
+static PyObject *
+node_int(PyObject *self)
+{
+    return node_unique_key((LibXML_NodeObject *)self, NULL);
+}
+
+static PyNumberMethods node_as_number = {
+    .nb_int = node_int,
+};
+
 /* str(node) is its XML, as "$node" in Perl */
 static PyObject *
 LibXML_Node_str(LibXML_NodeObject *self)
@@ -909,6 +1093,35 @@ static PyMethodDef LibXML_Node_methods[] = {
     {"localNS",              (PyCFunction)node_getNamespace,          METH_NOARGS,  "Return the namespace of this node"},
     {"localNamespace",       (PyCFunction)node_getNamespace,          METH_NOARGS,  "Return the namespace of this node"},
     {"setNodeName",          (PyCFunction)node_setNodeName,           METH_VARARGS, "Rename this node"},
+    {"setRawName",           (PyCFunction)node_setRawName,            METH_VARARGS, "Rename this node without checking the name"},
+    {"nonBlankChildNodes",   (PyCFunction)node_nonBlankChildNodes,    METH_NOARGS,  "Child nodes that are not blank text"},
+    {"firstNonBlankChild",   (PyCFunction)node_firstNonBlankChild,    METH_NOARGS,  "First child that is not blank text"},
+    {"nextNonBlankSibling",  (PyCFunction)node_nextNonBlankSibling,   METH_NOARGS,  "Next sibling that is not blank text"},
+    {"previousNonBlankSibling", (PyCFunction)node_previousNonBlankSibling, METH_NOARGS, "Previous sibling that is not blank text"},
+    {"getFirstChild",        (PyCFunction)node_getFirstChild,         METH_NOARGS,  "First child"},
+    {"getLastChild",         (PyCFunction)node_getLastChild,          METH_NOARGS,  "Last child"},
+    {"getNextSibling",       (PyCFunction)node_getNextSibling,        METH_NOARGS,  "Next sibling"},
+    {"getPreviousSibling",   (PyCFunction)node_getPreviousSibling,    METH_NOARGS,  "Previous sibling"},
+    {"getParentNode",        (PyCFunction)node_getParentNode,         METH_NOARGS,  "Parent node"},
+    {"getOwnerDocument",     (PyCFunction)node_getOwnerDocument,      METH_NOARGS,  "Owner document"},
+    {"getOwner",             (PyCFunction)node_getOwner,              METH_NOARGS,  "Root of the tree of this node"},
+    {"getLocalName",         (PyCFunction)node_getLocalName,          METH_NOARGS,  "Local name"},
+    {"getPrefix",            (PyCFunction)node_getPrefix,             METH_NOARGS,  "Namespace prefix"},
+    {"getType",              (PyCFunction)node_getType,               METH_NOARGS,  "Node type"},
+    {"getValue",             (PyCFunction)node_getNodeValue,          METH_NOARGS,  "Node value"},
+    {"getData",              (PyCFunction)node_getNodeValue,          METH_NOARGS,  "Node value"},
+    {"getChildNodes",        (PyCFunction)node_childNodes,            METH_NOARGS,  "Child nodes"},
+    {"getChildnodes",        (PyCFunction)node_childNodes,            METH_NOARGS,  "Child nodes"},
+    {"getAttributes",        (PyCFunction)node_attributes,            METH_NOARGS,  "Attributes"},
+    {"isEqual",              (PyCFunction)node_isSameNode,            METH_VARARGS, "Same as isSameNode"},
+    {"isSupported",          (PyCFunction)node_isSupported,           METH_VARARGS, "Tell if this node has this method"},
+    {"unlink",               (PyCFunction)node_unbindNode,            METH_NOARGS,  "Same as unbindNode"},
+    {"unlinkNode",           (PyCFunction)node_unbindNode,            METH_NOARGS,  "Same as unbindNode"},
+    {"toStringC14N",         (PyCFunction)node_toStringC14N,          METH_VARARGS|METH_KEYWORDS, "Canonical XML 1.0"},
+    {"serialize_c14n",       (PyCFunction)node_toStringC14N,          METH_VARARGS|METH_KEYWORDS, "Canonical XML 1.0"},
+    {"toStringC14N_v1_1",    (PyCFunction)node_toStringC14N_v1_1,     METH_VARARGS|METH_KEYWORDS, "Canonical XML 1.1"},
+    {"toStringEC14N",        (PyCFunction)node_toStringEC14N,         METH_VARARGS|METH_KEYWORDS, "Exclusive canonical XML"},
+    {"serialize_exc_c14n",   (PyCFunction)node_toStringEC14N,         METH_VARARGS|METH_KEYWORDS, "Exclusive canonical XML"},
     {"setBaseURI",           (PyCFunction)node_setBaseURI,            METH_VARARGS, "Set the base URI of this node"},
     {"setName",              (PyCFunction)node_setNodeName,           METH_VARARGS, "Rename this node"},
     {"hasAttributes",        (PyCFunction)node_hasAttributes,         METH_NOARGS,  "Return True if node has attributes"},
@@ -945,6 +1158,7 @@ static PyGetSetDef LibXML_Node_getset[] = {
     {"previousSibling",(getter)node_get_previousSibling, NULL,               "Previous sibling",    NULL},
     {"ownerDocument",(getter)node_get_ownerDocument,NULL,                    "Owner document",      NULL},
     {"baseURI",      (getter)node_get_baseURI,      NULL,                    "Base URI",            NULL},
+    {"ownerNode",    (getter)node_get_ownerNode,    NULL,                    "Root of the tree",    NULL},
     {NULL}
 };
 
@@ -956,6 +1170,7 @@ PyTypeObject LibXML_NodeType = {
     PyVarObject_HEAD_INIT(NULL, 0)
     .tp_name      = "xml_libxml.Node",
     .tp_basicsize = sizeof(LibXML_NodeObject),
+    .tp_as_number = &node_as_number,
     .tp_dealloc   = (destructor)LibXML_Node_dealloc,
     .tp_repr      = (reprfunc)LibXML_Node_repr,
     .tp_str       = (reprfunc)LibXML_Node_str,
@@ -970,6 +1185,37 @@ PyTypeObject LibXML_NodeType = {
 /* ------------------------------------------------------------------ */
 /* DocumentFragment type (thin subtype of Node)                        */
 /* ------------------------------------------------------------------ */
+
+/* Also in Element */
+static PyObject *
+frag_addNewChild(LibXML_NodeObject *self, PyObject *args)
+{
+    const char *ns_uri = NULL, *name;
+    if (!PyArg_ParseTuple(args, "zs", &ns_uri, &name)) return NULL;
+    if (ns_uri && ns_uri[0] == '\0') ns_uri = NULL;
+    if (LibXML_check_name(name) < 0) return NULL;
+
+    xmlDocPtr doc = self->node->doc;
+    xmlChar *prefix = NULL;
+    xmlChar *local = ns_uri ? xmlSplitQName2(BAD_CAST name, &prefix) : NULL;
+    xmlNodePtr child = xmlNewDocNode(doc, NULL, local ? local : BAD_CAST name, NULL);
+    if (child != NULL && ns_uri != NULL)
+        xmlSetNs(child, xmlNewNs(child, BAD_CAST ns_uri, prefix));
+    xmlFree(local);
+    xmlFree(prefix);
+    if (child == NULL) return PyErr_NoMemory();
+
+    if (LibXML_insert_node(child, self->node, NULL) < 0) {
+        xmlFreeNode(child);
+        return NULL;
+    }
+    return LibXML_Node_Wrap(child);
+}
+
+static PyMethodDef frag_methods[] = {
+    {"addNewChild", (PyCFunction)frag_addNewChild, METH_VARARGS, "Create a child element in a namespace"},
+    {NULL, NULL}
+};
 
 static PyObject *
 LibXML_DocumentFragment_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
@@ -991,5 +1237,6 @@ PyTypeObject LibXML_DocumentFragmentType = {
     .tp_flags     = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
     .tp_base      = &LibXML_NodeType,
     .tp_new       = LibXML_DocumentFragment_new,
+    .tp_methods   = frag_methods,
     .tp_doc       = "Document fragment node",
 };

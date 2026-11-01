@@ -757,6 +757,12 @@ elem_setAttributeNodeNS(LibXML_NodeObject *self, PyObject *args)
     return elem_setAttributeNode(self, args);
 }
 
+static PyObject *
+elem_getAttributeHash(LibXML_NodeObject *self, PyObject *args)
+{
+    return LibXML_dom_call("AttributeHash", (PyObject *)self, NULL);
+}
+
 static PyGetSetDef LibXML_Element_getset[] = {
     {"tagName", (getter)elem_get_tagName, NULL, "Qualified tag name", NULL},
     {NULL}
@@ -777,6 +783,7 @@ static PyMethodDef LibXML_Element_methods[] = {
     {"removeAttributeNS",       (PyCFunction)elem_removeAttributeNS,      METH_VARARGS, "Remove namespaced attribute"},
     {"hasAttribute",            (PyCFunction)elem_hasAttribute,            METH_VARARGS, "Check if attribute exists"},
     {"hasAttributeNS",          (PyCFunction)elem_hasAttributeNS,          METH_VARARGS, "Check if namespaced attribute exists"},
+    {"getAttributeHash",        (PyCFunction)elem_getAttributeHash,        METH_NOARGS,  "Attributes as a dict"},
     {"setAttributeNode",        (PyCFunction)elem_setAttributeNode,        METH_VARARGS, "Set attribute from Attr node"},
     {"setAttributeNodeNS",      (PyCFunction)elem_setAttributeNodeNS,      METH_VARARGS, "Set namespaced attribute from Attr node"},
     {"removeAttributeNode",     (PyCFunction)elem_removeAttributeNode,     METH_VARARGS, "Remove Attr node"},

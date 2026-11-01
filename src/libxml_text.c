@@ -212,6 +212,25 @@ chardata_replaceDataString(LibXML_NodeObject *self, PyObject *args)
     return chardata_replace_string(self, old_str, new_str, all);
 }
 
+static PyObject *
+chardata_replaceDataRegEx(LibXML_NodeObject *self, PyObject *args)
+{
+    PyObject *left, *right = NULL, *flags = NULL;
+    if (!PyArg_ParseTuple(args, "O|OO", &left, &right, &flags)) return NULL;
+
+    PyObject *call = PyTuple_Pack(4, self, left, right ? right : Py_None,
+                                  flags ? flags : Py_None);
+    if (call == NULL) return NULL;
+
+    PyObject *module = PyImport_ImportModule("xml_libxml._dom");
+    PyObject *replace = module ? PyObject_GetAttrString(module, "replace_data_regex") : NULL;
+    PyObject *result = replace ? PyObject_CallObject(replace, call) : NULL;
+    Py_XDECREF(replace);
+    Py_XDECREF(module);
+    Py_DECREF(call);
+    return result;
+}
+
 static PyGetSetDef chardata_getset[] = {
     {"data", (getter)chardata_get_data, (setter)chardata_set_data, "Character data", NULL},
     {NULL}
@@ -239,6 +258,7 @@ static PyMethodDef chardata_methods[] = {
     {"deleteDataString",  (PyCFunction)chardata_deleteDataString,  METH_VARARGS, "Delete first/all occurrences of string"},
     {"replaceData",       (PyCFunction)chardata_replaceData,       METH_VARARGS, "Replace data range"},
     {"replaceDataString", (PyCFunction)chardata_replaceDataString, METH_VARARGS, "Replace string occurrences"},
+    {"replaceDataRegEx",  (PyCFunction)chardata_replaceDataRegEx,  METH_VARARGS, "Replace a regular expression"},
     {"string_value",      (PyCFunction)chardata_string_value,      METH_NOARGS,  "Return text content"},
     {NULL, NULL}
 };
@@ -343,10 +363,43 @@ pi_set_data(LibXML_NodeObject *self, PyObject *value, void *closure)
     return chardata_set_data(self, value, closure);
 }
 
+/* setData(text), or setData(name=value...) that writes them as pseudo attributes */
 static PyObject *
-pi_setData(LibXML_NodeObject *self, PyObject *args)
+pi_setData(LibXML_NodeObject *self, PyObject *args, PyObject *kwds)
 {
-    return chardata_setData(self, args);
+    PyObject *text = NULL;
+
+    if (kwds != NULL && PyDict_Size(kwds) > 0) {
+        PyObject *parts = PyList_New(0);
+        PyObject *key, *value;
+        Py_ssize_t pos = 0;
+        while (parts && PyDict_Next(kwds, &pos, &key, &value)) {
+            PyObject *part = PyUnicode_FromFormat("%S=\"%S\"", key, value);
+            if (part == NULL || PyList_Append(parts, part) < 0) {
+                Py_XDECREF(part);
+                Py_DECREF(parts);
+                return NULL;
+            }
+            Py_DECREF(part);
+        }
+        PyObject *sep = PyUnicode_FromString(" ");
+        text = (sep && parts) ? PyUnicode_Join(sep, parts) : NULL;
+        Py_XDECREF(sep);
+        Py_XDECREF(parts);
+    } else {
+        const char *data;
+        if (!PyArg_ParseTuple(args, "s", &data)) return NULL;
+        text = PyUnicode_FromString(data);
+    }
+    if (text == NULL) return NULL;
+
+    /* The spec allows any characters but ?> in the data. */
+    const char *data = PyUnicode_AsUTF8(text);
+    if (data != NULL && strstr(data, "?>") == NULL)
+        xmlNodeSetContent(self->node, BAD_CAST data);
+    Py_DECREF(text);
+    if (PyErr_Occurred()) return NULL;
+    Py_RETURN_NONE;
 }
 
 static PyGetSetDef pi_getset[] = {
@@ -362,7 +415,7 @@ pi_getData(LibXML_NodeObject *self, PyObject *args)
 }
 
 static PyMethodDef pi_methods[] = {
-    {"setData", (PyCFunction)pi_setData, METH_VARARGS, "Set PI data"},
+    {"setData", (PyCFunction)pi_setData, METH_VARARGS|METH_KEYWORDS, "Set PI data"},
     {"getData", (PyCFunction)pi_getData, METH_NOARGS,  "Get PI data"},
     {NULL, NULL}
 };

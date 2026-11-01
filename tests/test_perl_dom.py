@@ -3,8 +3,7 @@ The parts of t/04node.t, t/05text.t, t/06elements.t, t/10ns.t and the rt tests o
 the same area that test_04, test_05, test_06 and test_10 do not cover, in the
 order of the Perl files.
 
-Not here yet: NamedNodeMap, nonBlank navigation and replaceDataRegEx (Phase 5),
-and the block of t/06elements.t with complete_attributes (Phase 3).
+NamedNodeMap, nonBlank navigation and replaceDataRegEx are in test_perl_doc.py.
 """
 import pytest
 

@@ -156,7 +156,15 @@ static PyGetSetDef LibXML_Attr_getset[] = {
     {NULL}
 };
 
+static PyObject *
+attr_getOwnerElement(LibXML_NodeObject *self, PyObject *args)
+{
+    return attr_get_ownerElement(self, NULL);
+}
+
 static PyMethodDef LibXML_Attr_methods[] = {
+    {"getOwnerElement",  (PyCFunction)attr_getOwnerElement,  METH_NOARGS,  "Element of this attribute"},
+    {"parentElement",    (PyCFunction)attr_getOwnerElement,  METH_NOARGS,  "Element of this attribute"},
     {"getValue",         (PyCFunction)attr_getValue,         METH_NOARGS,  "Get attribute value"},
     {"setValue",         (PyCFunction)attr_setValue,         METH_VARARGS, "Set attribute value"},
     {"setNamespace",     (PyCFunction)attr_setNamespace,     METH_VARARGS, "Set namespace on attribute"},

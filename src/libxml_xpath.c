@@ -939,6 +939,145 @@ PyTypeObject LibXML_XPathContextType = {
 };
 
 /* ------------------------------------------------------------------ */
+/* Canonical XML                                                       */
+/* ------------------------------------------------------------------ */
+
+#define C14N_ALL_NODES "(. | .//node() | .//@* | .//namespace::*)"
+
+/* The nodes to output, which the c14n code wants listed one by one. */
+static xmlXPathObjectPtr
+c14n_nodes(LibXML_NodeObject *self, PyObject *xpath, PyObject *xpc)
+{
+    xmlXPathContextPtr ctx;
+    PyObject *pool = NULL;
+    SavedContext saved;
+    LibXML_XPathContextObject *context = (LibXML_XPathContextObject *)xpc;
+    PyObject *previous_node = NULL;
+
+    if (xpc != Py_None) {
+        previous_node = context->node;
+        Py_INCREF(self);
+        context->node = (PyObject *)self;
+        context_enter(context, &saved);
+        ctx = context->ctx;
+    } else {
+        ctx = xmlXPathNewContext(self->node->doc);
+        pool = PyList_New(0);
+        if (ctx == NULL || pool == NULL) {
+            if (ctx) xmlXPathFreeContext(ctx);
+            Py_XDECREF(pool);
+            PyErr_NoMemory();
+            return NULL;
+        }
+        ctx->node = self->node;
+        ctx->extra = pool;
+        set_scope(ctx, self->node);
+    }
+
+    LibXML_eval_begin();
+    xmlXPathObjectPtr xobj = run_expression(ctx, xpath);
+    LibXML_eval_end();
+
+    if (xpc != Py_None) {
+        context_leave(context, &saved);
+        Py_DECREF(context->node);
+        context->node = previous_node;
+    } else {
+        xmlFree(ctx->namespaces);
+        ctx->namespaces = NULL;
+        ctx->nsNr = 0;
+        xmlXPathFreeContext(ctx);
+        Py_DECREF(pool);
+    }
+
+    if (xobj != NULL && (xobj->type != XPATH_NODESET || xobj->nodesetval == NULL)) {
+        xmlXPathFreeObject(xobj);
+        PyErr_SetString(LibXML_Error, "cannot canonize empty nodeset");
+        return NULL;
+    }
+    return xobj;
+}
+
+PyObject *
+LibXML_node_c14n(LibXML_NodeObject *self, int comments, PyObject *xpath, int mode,
+                 PyObject *prefixes, PyObject *xpc)
+{
+    int is_doc = self->node->type == XML_DOCUMENT_NODE
+              || self->node->type == XML_HTML_DOCUMENT_NODE;
+
+    if (xpc != Py_None && !PyObject_TypeCheck(xpc, &LibXML_XPathContextType)) {
+        PyErr_SetString(PyExc_TypeError, "xpc must be an XPathContext");
+        return NULL;
+    }
+    if (prefixes != Py_None && !PyList_Check(prefixes) && !PyTuple_Check(prefixes)) {
+        PyErr_SetString(LibXML_Error, "the inclusive prefix list must be a list or None");
+        return NULL;
+    }
+
+    PyObject *expr = NULL;
+    if (xpath != Py_None && !(PyUnicode_Check(xpath) && PyUnicode_GET_LENGTH(xpath) == 0)) {
+        if (check_expression(xpath) < 0) return NULL;
+        Py_INCREF(xpath);
+        expr = xpath;
+    } else if (!is_doc) {
+        expr = PyUnicode_FromString(comments ? C14N_ALL_NODES
+                                             : C14N_ALL_NODES "[not(self::comment())]");
+        if (expr == NULL) return NULL;
+    }
+
+    if (check_context_node(self->node) < 0) {
+        Py_XDECREF(expr);
+        return NULL;
+    }
+
+    xmlXPathObjectPtr xobj = NULL;
+    if (expr != NULL) {
+        xobj = c14n_nodes(self, expr, xpc);
+        Py_DECREF(expr);
+        if (xobj == NULL) return NULL;
+    }
+
+    /* The list of prefixes, as C strings */
+    xmlChar **list = NULL;
+    Py_ssize_t count = prefixes == Py_None ? 0 : PySequence_Size(prefixes);
+    if (prefixes != Py_None) {
+        list = PyMem_Calloc(count + 1, sizeof(xmlChar *));
+        if (list == NULL) {
+            if (xobj) xmlXPathFreeObject(xobj);
+            return PyErr_NoMemory();
+        }
+        for (Py_ssize_t i = 0; i < count; i++) {
+            PyObject *item = PySequence_GetItem(prefixes, i);
+            const char *text = item ? PyUnicode_AsUTF8(item) : NULL;
+            /* Strings of the list stay alive: it is held by the caller. */
+            Py_XDECREF(item);
+            if (text == NULL) {
+                PyMem_Free(list);
+                if (xobj) xmlXPathFreeObject(xobj);
+                return NULL;
+            }
+            list[i] = BAD_CAST text;
+        }
+    }
+
+    xmlChar *result = NULL;
+    LibXML_errors_begin();
+    int size = xmlC14NDocDumpMemory(self->node->doc, xobj ? xobj->nodesetval : NULL,
+                                    mode, list, comments, &result);
+    PyMem_Free(list);
+    if (xobj) xmlXPathFreeObject(xobj);
+
+    if (size < 0 || result == NULL) {
+        xmlFree(result);
+        LibXML_raise_last_error();
+        return NULL;
+    }
+    PyObject *text = PyUnicode_DecodeUTF8((const char *)result, size, "strict");
+    xmlFree(result);
+    return text;
+}
+
+/* ------------------------------------------------------------------ */
 /* Module                                                              */
 /* ------------------------------------------------------------------ */
 

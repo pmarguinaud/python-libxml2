@@ -622,7 +622,83 @@ print(raises(X.Error, lambda: a.findnodes('. | //@a')),
 
 case('is_valid_checks_dtd', """
 d = P.parse_string('<!DOCTYPE a [<!ELEMENT a (b)><!ELEMENT b EMPTY>]><a><c/></a>')
-print(d.is_valid())""", 'False', 6)
+print(d.is_valid())""", 'False')
+
+case('valid_after_removing_idref', """
+d = P.parse_string('<!DOCTYPE a [<!ELEMENT a (b*)><!ELEMENT b EMPTY><!ATTLIST b i ID #IMPLIED r IDREF #IMPLIED>]><a><b i="x"/><b r="x"/></a>')
+print(d.is_valid())
+r = d.documentElement
+r.removeChild(r.lastChild)
+del r
+print(d.is_valid())""", 'True\nTrue')
+
+case('ids_survive_validation', """
+d = P.parse_string('<!DOCTYPE a [<!ELEMENT a (b*)><!ELEMENT b EMPTY><!ATTLIST a i ID #IMPLIED><!ATTLIST b xml:id ID #IMPLIED>]><a i="k"><b xml:id="m"/></a>')
+dtd = X.Dtd.parse_string('<!ELEMENT a EMPTY>')
+print(d.is_valid(dtd), d.getElementById('k').nodeName, d.getElementById('m').nodeName)
+print(d.is_valid(), d.getElementById('k').nodeName, d.getElementById('m').nodeName)
+d2 = P.parse_string('<a><b xml:id="m"/></a>')
+print(d2.is_valid(), d2.getElementById('m').nodeName)
+print(d2.is_valid(dtd), d2.getElementById('m').nodeName)
+print(d2.documentElement.firstChild.getAttributeNode('xml:id').isId())""",
+     'False a b\nTrue a b\nFalse b\nFalse b\nTrue')
+
+case('dtd_keeps_entities_of_moved_refs', """
+P2 = X.Parser(expand_entities=0)
+d = P2.parse_string('<!DOCTYPE a [<!ENTITY e "v">]><a>&e;</a>')
+ref = d.documentElement.firstChild
+d2 = X.Document()
+d2.setDocumentElement(d2.createElement('z'))
+d2.setInternalSubset(d.internalSubset)
+print(d.internalSubset, ref.toString(), ref.firstChild.nodeValue)""", 'None &e; v')
+
+case('dtd_free_after_move', """
+import gc
+d = P.parse_string('<!DOCTYPE a [<!ELEMENT a EMPTY>]><a/>')
+dtd = d.internalSubset
+first = dtd.firstChild
+d2 = X.Document()
+d2.setInternalSubset(dtd)
+del d2, d
+gc.collect()
+print(first.nodeName, dtd.nodeName)""", 'a a')
+
+case('dtd_left_alone', """
+d = X.Document()
+dtd = d.createDTD('a', None, 'b.dtd')
+del d
+print(dtd.ownerDocument is not None, dtd.systemId)""", 'True b.dtd')
+
+case('leak_dtd_parse', """print(grows(lambda: X.Dtd.parse_string('<!ELEMENT a (b)><!ENTITY c "d">')))""", 'False')
+
+case('leak_dtd_move', """
+def f():
+    d = P.parse_string('<!DOCTYPE a [<!ELEMENT a EMPTY>]><a/>')
+    d2 = P.parse_string('<!DOCTYPE a [<!ELEMENT a EMPTY>]><a/>')
+    d2.setInternalSubset(d.internalSubset)
+print(grows(f, 40000))""", 'False')
+
+case('leak_validate', """
+dtd = X.Dtd.parse_string('<!ELEMENT a (b)><!ELEMENT b EMPTY>')
+d = P.parse_string('<a><c/></a>')
+print(grows(lambda: d.is_valid(dtd)))
+def f():
+    try: d.validate(dtd)
+    except X.Error: pass
+print(grows(f))""", 'False\nFalse')
+
+case('leak_attribute_hash', """
+def f():
+    r = P.parse_string('<r a="1" xmlns:x="urn:x" x:b="2"/>').documentElement
+    h = r.getAttributeHash()
+    h['k'] = 'v'
+    dict(h)
+print(grows(f, 40000))""", 'False')
+
+case('leak_c14n', """
+d = P.parse_string('<a><b x="1"/></a>')
+r = d.documentElement
+print(grows(lambda: (d.toStringC14N(), r.toStringC14N(), d.toStringEC14N(0, '//b', ['p']))))""", 'False')
 
 
 def _param(c):

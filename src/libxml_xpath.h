@@ -30,6 +30,11 @@ typedef enum {
 /* Evaluate expr, a str or XPathExpression, with node as context. */
 PyObject *LibXML_node_xpath(LibXML_NodeObject *node, PyObject *expr, LibXML_XPathMode mode);
 
+/* Canonical XML of a node, or of what xpath selects. mode is an xmlC14NMode,
+ * prefixes None or a list, and xpc None or an XPathContext. */
+PyObject *LibXML_node_c14n(LibXML_NodeObject *node, int comments, PyObject *xpath,
+                           int mode, PyObject *prefixes, PyObject *xpc);
+
 /* Make a Literal, Number from text. Takes no reference. */
 PyObject *LibXML_new_literal(PyObject *text);
 PyObject *LibXML_new_number(PyObject *text);

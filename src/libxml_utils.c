@@ -5,6 +5,7 @@
 #include "libxml_element.h"
 #include "libxml_attr.h"
 #include "libxml_text.h"
+#include "libxml_dtd.h"
 
 /* ------------------------------------------------------------------ */
 /* Errors                                                              */
@@ -201,6 +202,26 @@ LibXML_raise_last_error(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* What is written in Python                                           */
+/* ------------------------------------------------------------------ */
+
+PyObject *
+LibXML_dom_call(const char *name, PyObject *arg1, PyObject *arg2)
+{
+    static PyObject *module = NULL;
+
+    if (module == NULL) {
+        module = PyImport_ImportModule("xml_libxml._dom");
+        if (module == NULL) return NULL;
+    }
+    PyObject *func = PyObject_GetAttrString(module, name);
+    if (func == NULL) return NULL;
+    PyObject *result = PyObject_CallFunctionObjArgs(func, arg1, arg2, NULL);
+    Py_DECREF(func);
+    return result;
+}
+
+/* ------------------------------------------------------------------ */
 /* Names                                                               */
 /* ------------------------------------------------------------------ */
 
@@ -231,6 +252,7 @@ wrapper_type(xmlNodePtr node)
     case XML_HTML_DOCUMENT_NODE:  return &LibXML_DocumentType;
     case XML_PI_NODE:             return &LibXML_PIType;
     case XML_DOCUMENT_FRAG_NODE:  return &LibXML_DocumentFragmentType;
+    case XML_DTD_NODE:            return &LibXML_DtdType;
     default:                      return &LibXML_NodeType;
     }
 }

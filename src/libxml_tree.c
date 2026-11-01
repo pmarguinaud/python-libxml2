@@ -818,6 +818,11 @@ LibXML_insert_node(xmlNodePtr node, xmlNodePtr parent, xmlNodePtr before)
         return attach_attr((xmlAttrPtr)node, parent);
     if (node->type == XML_DOCUMENT_FRAG_NODE)
         return insert_fragment(node, parent, before);
+    if (node->type == XML_DTD_NODE) {
+        if (parent->type != XML_DOCUMENT_NODE && parent->type != XML_HTML_DOCUMENT_NODE)
+            return hierarchy_error("only a document can hold a DTD");
+        return LibXML_set_int_subset((xmlDocPtr)parent, node, before);
+    }
     if (check_insert(node, parent, before, 0) < 0)
         return -1;
     return move_node(node, parent, before);
@@ -849,30 +854,86 @@ replace_attr(xmlAttrPtr old_attr, xmlAttrPtr new_attr)
     return 0;
 }
 
-/* A DTD belongs to its document through doc->intSubset and hash tables shared
- * with nothing else, so the new one is a copy and new_dtd stays where it is. */
-static int
-replace_dtd(xmlDtdPtr old_dtd, xmlDtdPtr new_dtd)
+/* Make dtd belong to doc. Returns the node to use, or NULL with an exception. */
+static xmlNodePtr
+dtd_for_document(xmlNodePtr dtd, xmlDocPtr doc)
 {
-    xmlDocPtr doc = old_dtd->doc;
+    if (dtd->doc == doc)
+        return dtd;
 
-    if (doc->intSubset != old_dtd)
-        return hierarchy_error("only an internal subset can be replaced");
-
-    xmlDtdPtr copy = xmlCopyDtd(new_dtd);
+    xmlDtdPtr copy = xmlCopyDtd((xmlDtdPtr)dtd);
     if (copy == NULL) {
         PyErr_NoMemory();
-        return -1;
+        return NULL;
     }
     xmlSetTreeDoc((xmlNodePtr)copy, doc);
 
-    if (xmlReplaceNode((xmlNodePtr)old_dtd, (xmlNodePtr)copy) == NULL) {
-        xmlFreeDtd(copy);
-        PyErr_SetString(LibXML_Error, "cannot replace DTD");
+    /* The wrapper, and any cargo, go with the copy. */
+    LibXML_NodePrivate *priv = (LibXML_NodePrivate *)dtd->_private;
+    dtd->_private = NULL;
+    ((xmlNodePtr)copy)->_private = priv;
+    if (priv != NULL && priv->wrapper != NULL)
+        ((LibXML_NodeObject *)priv->wrapper)->node = (xmlNodePtr)copy;
+
+    xmlUnlinkNode(dtd);
+    LibXML_free_tree(dtd);
+    return (xmlNodePtr)copy;
+}
+
+int
+LibXML_set_int_subset(xmlDocPtr doc, xmlNodePtr dtd, xmlNodePtr before)
+{
+    xmlNodePtr parent = (xmlNodePtr)doc;
+    xmlNodePtr old = (xmlNodePtr)doc->intSubset;
+
+    if (before != NULL && before->parent != parent)
+        return hierarchy_error("the reference node is not a child of this node");
+
+    if (old == dtd && (before == dtd || before == dtd->next))
+        return 0;
+
+    dtd = dtd_for_document(dtd, doc);
+    if (dtd == NULL)
         return -1;
+
+    if (before == old || before == dtd)
+        before = old ? old->next : NULL;
+    if (before == dtd)
+        before = dtd->next;
+
+    /* Unlinking clears intSubset and extSubset where dtd is one of them. */
+    xmlUnlinkNode(dtd);
+    if (old != NULL && old != dtd)
+        LibXML_release_node(old);
+
+    link_node(dtd, parent, before);
+    doc->intSubset = (xmlDtdPtr)dtd;
+    LibXML_fix_owner(dtd);
+    return 0;
+}
+
+int
+LibXML_set_ext_subset(xmlDocPtr doc, xmlNodePtr dtd)
+{
+    xmlNodePtr old = (xmlNodePtr)doc->extSubset;
+
+    if (old == dtd)
+        return 0;
+
+    dtd = dtd_for_document(dtd, doc);
+    if (dtd == NULL)
+        return -1;
+
+    xmlUnlinkNode(dtd);
+    if (old != NULL) {
+        doc->extSubset = NULL;
+        LibXML_fix_owner(old);
+        LibXML_NodePrivate *priv = (LibXML_NodePrivate *)old->_private;
+        if (priv == NULL || priv->wrapper == NULL)
+            LibXML_free_tree(old);
     }
-    doc->intSubset = copy;
-    LibXML_fix_owner((xmlNodePtr)old_dtd);
+    doc->extSubset = (xmlDtdPtr)dtd;
+    LibXML_fix_owner(dtd);
     return 0;
 }
 
@@ -888,11 +949,18 @@ LibXML_replace_node(xmlNodePtr old_node, xmlNodePtr new_node)
     if (old_node == new_node)
         return 0;
 
-    if (old_node->type == XML_DTD_NODE) {
-        if (new_node->type != XML_DTD_NODE)
-            return hierarchy_error("a DTD can only be replaced by a DTD");
-        return replace_dtd((xmlDtdPtr)old_node, (xmlDtdPtr)new_node);
+    if (new_node->type == XML_DTD_NODE) {
+        if (parent->type != XML_DOCUMENT_NODE && parent->type != XML_HTML_DOCUMENT_NODE)
+            return hierarchy_error("only a document can hold a DTD");
+        if (LibXML_set_int_subset((xmlDocPtr)parent, new_node, old_node) < 0)
+            return -1;
+        /* The DTD before it is gone already. */
+        if (old_node->parent != NULL)
+            LibXML_detach_node(old_node);
+        return 0;
     }
+    if (old_node->type == XML_DTD_NODE)
+        return hierarchy_error("a DTD can only be replaced by a DTD");
 
     if (old_node->type == XML_ATTRIBUTE_NODE) {
         if (new_node->type != XML_ATTRIBUTE_NODE)

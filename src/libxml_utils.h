@@ -30,6 +30,9 @@ PyObject *LibXML_Node_Wrap_As(xmlNodePtr node, PyTypeObject *type);
 /* New hidden document, for nodes created without one. Returns its wrapper. */
 PyObject *LibXML_new_hidden_doc(void);
 
+/* Call a function of _dom.py with one argument, and a second unless NULL. */
+PyObject *LibXML_dom_call(const char *name, PyObject *arg1, PyObject *arg2);
+
 /* Check an element or attribute name. Returns 0, or -1 with an exception set. */
 int LibXML_check_name(const char *name);
 

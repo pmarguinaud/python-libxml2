@@ -198,8 +198,62 @@ def op_xpath_callback():
         remember(hit)
 
 
+def op_dtd():
+    a, d, e = pick(), pick_doc(), pick_doc()
+    choices = [
+        lambda: X.Dtd.parse_string('<!ELEMENT e ANY><!ENTITY other "o">'),
+        lambda: d.createDTD('m', None, 'x.dtd'),
+        lambda: d.createInternalSubset('m'),
+        lambda: d.createExternalSubset('m', None, 'x.dtd'),
+    ]
+    dtd = d.internalSubset or e.internalSubset or d.externalSubset or rng.choice(choices)()
+    if rng.random() < 0.3:
+        dtd = rng.choice(choices)()
+    remember(dtd)
+    if rng.random() < 0.3:
+        remember(dtd.firstChild)
+    rng.choice([
+        lambda: e.setInternalSubset(dtd),
+        lambda: e.setExternalSubset(dtd),
+        lambda: remember(e.removeInternalSubset()),
+        lambda: remember(e.removeExternalSubset()),
+        lambda: e.appendChild(dtd),
+        lambda: e.insertBefore(dtd, e.documentElement),
+        lambda: e.insertAfter(dtd, e.firstChild),
+        lambda: e.replaceChild(dtd, e.firstChild),
+        lambda: a.replaceNode(dtd),
+        lambda: a.addSibling(dtd),
+        lambda: a.appendChild(dtd),
+        lambda: dtd.unbindNode(),
+        lambda: remember(dtd.cloneNode(1)),
+        lambda: e.is_valid(),
+        lambda: e.is_valid(dtd),
+        lambda: e.validate(dtd),
+        lambda: e.toStringC14N(rng.randint(0, 1)),
+        lambda: a.toStringC14N(0, '//*'),
+        lambda: a.toStringEC14N(1, None, ['p']),
+        lambda: e.toStringC14N_v1_1(),
+        lambda: remember(e.createEntityReference('ent')),
+    ])()
+
+
+def op_attributes():
+    a, b = pick(), pick()
+    attrs, hash_view = a.attributes(), a.getAttributeHash()
+    rng.choice([
+        lambda: attrs.setNamedItem(b),
+        lambda: attrs.removeNamedItem(rng.choice(['x', 'y', 'id', 'p:q'])),
+        lambda: hash_view.update({'k': 'v', '{urn:h}k': 'w'}),
+        lambda: hash_view.pop(rng.choice(['x', 'y', 'k', '{urn:h}k'])),
+        lambda: list(hash_view.items()),
+        lambda: a.nonBlankChildNodes(),
+        lambda: remember(a.firstNonBlankChild()),
+    ])()
+
+
 OPS = [op_grab, op_create, op_fragment, op_move, op_move, op_move,
-       op_documents, op_content, op_content, op_forget, op_xpath_callback]
+       op_documents, op_content, op_content, op_forget, op_xpath_callback,
+       op_dtd, op_dtd, op_attributes]
 
 for doc in docs:
     remember(doc.documentElement)
@@ -208,7 +262,7 @@ for step in range(steps):
         rng.choice(OPS)()
         if pool:
             scan(pick())
-    except (X.Error, TypeError, AttributeError, IndexError):
+    except (X.Error, TypeError, AttributeError, IndexError, KeyError):
         pass
 
 for node in pool:

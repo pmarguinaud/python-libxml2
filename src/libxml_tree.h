@@ -68,6 +68,12 @@ int LibXML_insert_node(xmlNodePtr node, xmlNodePtr parent, xmlNodePtr before);
 /* Put new_node in the place of old_node, which is detached but stays alive. */
 int LibXML_replace_node(xmlNodePtr old_node, xmlNodePtr new_node);
 
+/* The internal subset and the external subset of a document. A DTD from another
+ * document moves by a copy: its wrapper takes the copy, and the original stays
+ * with its document, as entity references point into it. */
+int LibXML_set_int_subset(xmlDocPtr doc, xmlNodePtr dtd, xmlNodePtr before);
+int LibXML_set_ext_subset(xmlDocPtr doc, xmlNodePtr dtd);
+
 /* Make node the root element of doc. The previous root is released. */
 int LibXML_set_root(xmlDocPtr doc, xmlNodePtr node);
 
