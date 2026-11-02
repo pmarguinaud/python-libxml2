@@ -65,6 +65,7 @@ from xml_libxml._libxml import externalEntityLoader
 from xml_libxml._reader import Reader
 from xml_libxml._dom import AttributeHash, NamedNodeMap
 from xml_libxml.Common import decodeFromUTF8, encodeToUTF8
+from xml_libxml import SAX
 
 
 createDocument = Document.createDocument
@@ -86,7 +87,7 @@ __all__ = [
     'Parser', 'Document', 'Node', 'Element', 'Text', 'Comment',
     'CDATASection', 'PI', 'Attr', 'Namespace', 'Dtd', 'RelaxNG', 'Schema', 'Pattern', 'RegExp', 'NodeList', 'XPathContext', 'XPathExpression',
     'Literal', 'Number', 'Boolean', 'DocumentFragment',
-    'Error', 'ErrNo', 'Common', 'load_xml', 'load_html', 'createDocument', 'load_catalog',
+    'Error', 'ErrNo', 'Common', 'SAX', 'load_xml', 'load_html', 'createDocument', 'load_catalog',
     'InputCallback', 'externalEntityLoader', 'Reader', 'callbacks', 'match_callback',
     'open_callback', 'read_callback', 'close_callback',
     'AttributeHash', 'NamedNodeMap', 'encodeToUTF8', 'decodeFromUTF8',

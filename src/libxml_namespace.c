@@ -180,6 +180,8 @@ static PyGetSetDef ns_getset[] = {
     {"declaredURI",    (getter)ns_uri,             NULL, "Declared namespace URI", NULL},
     {"value",          (getter)ns_uri,             NULL, "Declared namespace URI", NULL},
     {"nodeValue",      (getter)ns_uri,             NULL, "Declared namespace URI", NULL},
+    {"href",           (getter)ns_uri,             NULL, "Declared namespace URI", NULL},
+    {"value2",         (getter)ns_uri,             NULL, "Declared namespace URI", NULL},
     {"textContent",    (getter)ns_uri,             NULL, "Declared namespace URI", NULL},
     {"declaredPrefix", (getter)ns_declared_prefix, NULL, "Declared prefix", NULL},
     {"localname",      (getter)ns_declared_prefix, NULL, "Declared prefix", NULL},

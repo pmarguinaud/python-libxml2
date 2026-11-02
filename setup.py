@@ -34,6 +34,7 @@ libxml_ext = Extension(
         'src/libxml_schema.c',
         'src/libxml_input.c',
         'src/libxml_reader.c',
+        'src/libxml_sax.c',
         'src/libxml_node.c',
         'src/libxml_document.c',
         'src/libxml_element.c',

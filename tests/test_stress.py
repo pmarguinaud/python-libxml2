@@ -20,6 +20,7 @@ PROGRAM = r"""
 import gc, random, sys
 sys.path.insert(0, %(root)r)
 import xml_libxml as X
+from xml_libxml import SAX
 
 seed, steps = int(sys.argv[1]), int(sys.argv[2])
 rng = random.Random(seed)
@@ -370,10 +371,69 @@ def op_reader():
         ])()
 
 
+class Meddler:
+    # A SAX handler that changes trees, parses, pushes and raises.
+    def __getattr__(self, name):
+        if name.startswith('__'):
+            raise AttributeError(name)
+
+        def event(*args):
+            if rng.random() < 0.05:
+                meddle_and_give(None)
+            if rng.random() < 0.03:
+                rng.choice([
+                    lambda: SAX_PUSHER.push('<q>'),
+                    lambda: SAX_PUSHER.finish_push(rng.randint(0, 1)),
+                    lambda: SAX_PUSHER.parse_string('<s/>'),
+                    lambda: SAX_PUSHER.set_handler(rng.choice([None, Meddler()])),
+                ])()
+            if rng.random() < 0.02:
+                raise ValueError('handler')
+        return event
+
+
+SAX_PUSHER = X.Parser(Handler=Meddler())
+
+
+def keep_built(result):
+    if isinstance(result, X.Document):
+        docs.append(result)
+        del docs[:-6]
+        remember(result.documentElement)
+    elif isinstance(result, X.Node):
+        remember(result)
+
+
+def builder_chunk(text):
+    builder = SAX.Builder()
+    SAX.SAX(Handler=builder).parse_chunk(text)
+    keep_built(builder.done())
+
+
+def op_sax():
+    text = rng.choice(SOURCES + [INCLUDE, ENTITY_DOC])
+    cut = rng.randint(0, len(text))
+    rng.choice([
+        lambda: keep_built(SAX.SAX(Handler=SAX.Builder()).parse_string(text)),
+        lambda: keep_built(SAX.Parser(Handler=SAX.Builder()).generate(pick_doc())),
+        lambda: SAX.Parser(Handler=Meddler()).generate(pick_doc()),
+        lambda: X.Parser(Handler=Meddler(), expand_entities=rng.randint(0, 1)).parse_string(text),
+        lambda: X.Parser(Handler=Meddler()).parse_xml_chunk(text),
+        lambda: builder_chunk(text),
+        lambda: SAX_PUSHER.push(text[:cut], text[cut:]),
+        lambda: SAX_PUSHER.push(text[:cut]),
+        lambda: SAX_PUSHER.finish_push(rng.randint(0, 1)),
+        lambda: SAX_PUSHER.set_handler(Meddler(), join_characters=rng.randint(0, 1)),
+        lambda: (lambda parser: (parser.set_handler(Meddler()),
+                                 parser.parse_string(rng.choice([INCLUDE, ENTITY_DOC]))))(
+            callback_parser()),
+    ])()
+
+
 OPS = [op_grab, op_create, op_fragment, op_move, op_move, op_move,
        op_documents, op_content, op_content, op_forget, op_xpath_callback,
        op_dtd, op_dtd, op_attributes, op_xinclude, op_schema, op_callbacks, op_push,
-       op_reader, op_reader]
+       op_reader, op_reader, op_sax, op_sax]
 
 for doc in docs:
     remember(doc.documentElement)
@@ -382,7 +442,8 @@ for step in range(steps):
         rng.choice(OPS)()
         if pool:
             scan(pick())
-    except (X.Error, TypeError, AttributeError, IndexError, KeyError, ValueError):
+    except (X.Error, SAX.SAXException, TypeError, AttributeError, IndexError, KeyError,
+            ValueError):
         pass
 
 for node in pool:

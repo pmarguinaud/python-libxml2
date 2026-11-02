@@ -888,6 +888,81 @@ r = d.documentElement
 print(grows(lambda: (d.toStringC14N(), r.toStringC14N(), d.toStringEC14N(0, '//b', ['p']))))""", 'False')
 
 
+# ---------------------------------------------------------------- phase 9: SAX
+
+# The strings of the SAX loops of t/11memory.t
+SAX_STRINGS = [
+    "<xml1><xml2><xml3></xml3></xml2></xml1>",
+    "<xml1> <xml2>some text some text some text </xml2> </xml1>",
+    "<xml1> <xml2> <!-- some text --> <!-- some text --> <!--some text--> </xml2> </xml1>",
+    "<xml1> <xml2><![CDATA[some text some text some text]]></xml2> </xml1>",
+    '<xml1  attr0="value0"> <xml2 attr1="value1"></xml2> </xml1>',
+    '<xm:xml1 xmlns:xm="foo"><xm:xml2/></xm:xml1>',
+    '<xm:xml1 xmlns:xm="foo"><xm:xml2 xm:foo="bar"/></xm:xml1>',
+]
+SAX_PUSHED = [
+    ["<xml1>", "<xml2><xml3></xml3></xml2>", "</xml1>"],
+    ["<xml1", "> <xml2> <!", "-- some text --> <!-- some text --> <!--some text-", "-> </xml2> </xml1>"],
+    ["<xml1> ", "<xml2><!", "[CDATA[some text some text some text]", "]></xml2> </xml1>"],
+    ['<xm:xml1 xmlns:x', 'm="foo"><xm:xml2', '/></xm:xml1>'],
+    ["<xml1>"],
+    ["<xml1>", "</xml2>", "</xml1>"],
+    ["<xml1/> ", "junk"],
+]
+
+case('leak_sax', """
+from xml_libxml import SAX
+strings, pushed = %r, %r
+class Null:
+    def start_element(self, el): pass
+    def characters(self, data): pass
+    def start_prefix_mapping(self, ns): pass
+parser = X.Parser(Handler=Null())
+def parse():
+    for s in strings:
+        parser.parse_string(s)
+        parser.parse_xml_chunk(s)
+def push():
+    for chunks in pushed:
+        try:
+            parser.push(*chunks)
+            parser.finish_push()
+        except X.Error:
+            pass
+def build():
+    for s in strings:
+        SAX.SAX(Handler=SAX.Builder()).parse_string(s)
+        SAX.Parser(Handler=SAX.Builder()).parse_string(s)
+class Boom(Exception): pass
+class Raiser:
+    def characters(self, data): raise Boom()
+    def fatal_error(self, error): raise Boom()
+raiser = X.Parser(Handler=Raiser())
+def fail():
+    for s in strings + ['<a><b></a>']:
+        try:
+            raiser.parse_string(s)
+        except (Boom, X.Error):
+            pass
+print(grows(parse, 4000), grows(push, 4000), grows(build, 2000), grows(fail, 4000))""" % (
+    SAX_STRINGS, SAX_PUSHED), 'False False False False')
+
+case('sax_handler_freed_with_its_push', """
+import weakref
+class H:
+    pass
+h = H()
+p = X.Parser(Handler=h)
+p.push('<a>')
+r = weakref.ref(h)
+p.set_handler(None)
+del h
+print(r() is not None)
+del p
+gc.collect()
+print(r() is None)""", 'True\nTrue')
+
+
 def _param(c):
     name, code, expected, phase, strict = c
     marks = []

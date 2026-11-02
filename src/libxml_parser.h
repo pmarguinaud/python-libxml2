@@ -11,6 +11,7 @@ typedef struct {
     xmlParserCtxtPtr push_ctxt;     /* the push parse in progress, or NULL */
     int push_busy;                  /* libxml2 is working on it, and a callback runs */
     xmlChar *push_declared;         /* its declared encoding, if it was given as str */
+    struct LibXML_SaxState *push_sax;   /* its SAX state, when it has a handler */
 } LibXML_ParserObject;
 
 extern PyTypeObject LibXML_ParserType;

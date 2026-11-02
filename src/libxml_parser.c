@@ -4,6 +4,7 @@
 #include "libxml_node.h"
 #include "libxml_tree.h"
 #include "libxml_input.h"
+#include "libxml_sax.h"
 #include <libxml/parserInternals.h>
 #include <libxml/xinclude.h>
 #include <libxml/catalog.h>
@@ -49,6 +50,7 @@ extra_key(const char *name)
     if (strcmp(name, "line_numbers") == 0)    return "line_numbers";
     if (strcmp(name, "gdome") == 0)           return "gdome";
     if (strcmp(name, "ext_ent_handler") == 0) return "ext_ent_handler";
+    if (strcmp(name, "Handler") == 0)         return "Handler";
     return NULL;
 }
 
@@ -513,11 +515,138 @@ parser_load_catalog(PyObject *cls, PyObject *args)
     Py_RETURN_NONE;
 }
 
+/* ------------------------------------------------------------------ */
+/* SAX                                                                 */
+/* ------------------------------------------------------------------ */
+
+/* The SAX handler of a parse, or NULL. Borrowed. */
+static PyObject *
+extra_handler(PyObject *extra)
+{
+    PyObject *handler = PyDict_GetItemString(extra, "Handler");
+    return (handler == NULL || handler == Py_None) ? NULL : handler;
+}
+
+static int
+extra_join(PyObject *extra)
+{
+    PyObject *join = PyDict_GetItemString(extra, "join_characters");
+    return join != NULL && PyObject_IsTrue(join) > 0;
+}
+
+/* The end of a SAX parse, once libxml2 is done: the exception of the handler wins,
+ * then the errors; end_document comes last, and what it returns is the result. */
+static PyObject *
+finish_sax(LibXML_SaxState *st, int acceptable, int recover, int end)
+{
+    if (LibXML_sax_flush(st) < 0 || PyErr_Occurred()) {
+        PyObject *type, *value, *tb;
+        PyErr_Fetch(&type, &value, &tb);
+        LibXML_errors_begin();
+        PyErr_Restore(type, value, tb);
+        return NULL;
+    }
+    if (LibXML_report_errors(recover) < 0)
+        return NULL;
+    if (!acceptable) {
+        PyErr_SetString(LibXML_Error, "parsing failed");
+        return NULL;
+    }
+    if (!end) Py_RETURN_NONE;
+    return LibXML_sax_end_document(st);
+}
+
+/* Parse with the events going to handler: no document is kept. */
+static PyObject *
+parse_xml_sax(ParseConfig *cfg, const Input *in, const char *filename,
+              const char *url, const char *encoding, PyObject *handler)
+{
+    PyObject *uri_hold = NULL;
+    if (url == NULL)
+        url = config_uri(cfg, &uri_hold);
+
+    /* A str is UTF-8, whatever it declares. */
+    if (in != NULL && in->is_text && encoding == NULL) {
+        xmlChar *declared = declared_encoding(in->data, in->size);
+        if (declared != NULL)
+            encoding = "UTF-8";
+        xmlFree(declared);
+    }
+
+    LibXML_SaxState *st = LibXML_sax_new(handler, extra_join(cfg->extra));
+    if (st == NULL) {
+        Py_XDECREF(uri_hold);
+        return NULL;
+    }
+
+    LibXML_errors_begin();
+    xmlParserCtxtPtr ctxt = xmlNewParserCtxt();
+    if (ctxt == NULL) {
+        LibXML_sax_free(st);
+        Py_XDECREF(uri_hold);
+        return PyErr_NoMemory();
+    }
+    LibXML_sax_attach(st, ctxt);
+
+    LibXML_ParseState state;
+    state_begin(&state, cfg->extra);
+    xmlDocPtr doc;
+    if (filename != NULL)
+        doc = xmlCtxtReadFile(ctxt, filename, encoding, xml_options(cfg));
+    else
+        doc = xmlCtxtReadMemory(ctxt, in->data, (int)in->size, url, encoding,
+                                xml_options(cfg));
+    LibXML_state_pop(&state);
+
+    int well_formed = ctxt->wellFormed;
+    LibXML_sax_detach(st);
+    if (doc != NULL) xmlFreeDoc(doc);
+    xmlFreeParserCtxt(ctxt);
+    Py_XDECREF(uri_hold);
+
+    PyObject *result = finish_sax(st, cfg->recover || well_formed,
+                                  quiet_recover(cfg->recover, cfg->flags), 1);
+    LibXML_sax_free(st);
+    return result;
+}
+
+/* parse_xml_chunk with a handler. end: call end_document, as Perl does unless the
+ * parser is used as a filter. */
+static PyObject *
+parse_chunk_sax(LibXML_ParserObject *self, const char *chunk, PyObject *handler, int end)
+{
+    if (chunk[0] == '\0') {
+        PyErr_SetString(LibXML_Error, "Empty String");
+        return NULL;
+    }
+
+    LibXML_SaxState *st = LibXML_sax_new(handler, extra_join(self->extra));
+    if (st == NULL) return NULL;
+
+    LibXML_errors_begin();
+    LibXML_ParseState state;
+    state_begin(&state, self->extra);
+    LibXML_SaxState *previous = LibXML_sax_chunk_begin(st);
+    int rc = xmlParseBalancedChunkMemory(NULL, (xmlSAXHandler *)LibXML_sax_handler(), NULL, 0,
+                                         BAD_CAST chunk, NULL);
+    LibXML_sax_chunk_end(st, previous);
+    LibXML_state_pop(&state);
+
+    PyObject *result = finish_sax(st, rc == 0 || self->recover,
+                                  quiet_recover(self->recover, self->flags), end);
+    LibXML_sax_free(st);
+    return result;
+}
+
 /* Parse from memory, or from a file if filename is set. */
 static PyObject *
 parse_xml(ParseConfig *cfg, const Input *in, const char *filename,
           const char *url, const char *encoding)
 {
+    PyObject *handler = extra_handler(cfg->extra);
+    if (handler != NULL)
+        return parse_xml_sax(cfg, in, filename, url, encoding, handler);
+
     PyObject *uri_hold = NULL;
     if (url == NULL)
         url = config_uri(cfg, &uri_hold);
@@ -995,7 +1124,41 @@ parser_parse_balanced_chunk(LibXML_ParserObject *self, PyObject *args)
 {
     const char *chunk;
     if (!PyArg_ParseTuple(args, "s", &chunk)) return NULL;
+    PyObject *handler = extra_handler(self->extra);
+    if (handler != NULL)
+        return parse_chunk_sax(self, chunk, handler, 1);
     return LibXML_parse_chunk(chunk, !(self->flags & XML_PARSE_NOBLANKS));
+}
+
+/* The events of a chunk, without end_document: for SAX.parse_chunk. */
+static PyObject *
+parser_sax_chunk(LibXML_ParserObject *self, PyObject *args)
+{
+    const char *chunk;
+    if (!PyArg_ParseTuple(args, "s", &chunk)) return NULL;
+    PyObject *handler = extra_handler(self->extra);
+    if (handler == NULL) {
+        PyErr_SetString(LibXML_Error, "this parser has no SAX handler");
+        return NULL;
+    }
+    return parse_chunk_sax(self, chunk, handler, 0);
+}
+
+/* set_handler(handler, join_characters=False): None goes back to building trees. */
+static PyObject *
+parser_set_handler(LibXML_ParserObject *self, PyObject *args, PyObject *kwds)
+{
+    PyObject *handler;
+    int join = 0;
+    static char *kwlist[] = {"handler", "join_characters", NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|p", kwlist, &handler, &join))
+        return NULL;
+    if (PyDict_SetItemString(self->extra, "Handler", handler) < 0) return NULL;
+    PyObject *flag = PyBool_FromLong(join);
+    int rc = PyDict_SetItemString(self->extra, "join_characters", flag);
+    Py_DECREF(flag);
+    if (rc < 0) return NULL;
+    Py_RETURN_NONE;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1103,15 +1266,20 @@ push_free(LibXML_ParserObject *self)
 {
     xmlParserCtxtPtr ctxt = self->push_ctxt;
 
+    LibXML_SaxState *st = self->push_sax;
+
     self->push_ctxt = NULL;
+    self->push_sax = NULL;
     xmlFree(self->push_declared);
     self->push_declared = NULL;
+    LibXML_sax_detach(st);
     if (ctxt != NULL) {
         xmlDocPtr doc = ctxt->myDoc;
         ctxt->myDoc = NULL;
         xmlFreeParserCtxt(ctxt);
         if (doc != NULL) xmlFreeDoc(doc);
     }
+    LibXML_sax_free(st);
 }
 
 /* A callback must not touch the context that libxml2 is working on. */
@@ -1146,14 +1314,27 @@ push_start(LibXML_ParserObject *self)
 
     push_free(self);
 
+    /* The handler is the one of the start, as in Perl. */
+    PyObject *handler = extra_handler(cfg.extra);
+    LibXML_SaxState *st = NULL;
+    if (handler != NULL && (st = LibXML_sax_new(handler, extra_join(cfg.extra))) == NULL) {
+        config_clear(&cfg);
+        return -1;
+    }
+
     PyObject *uri_hold = NULL;
     const char *url = config_uri(&cfg, &uri_hold);
     self->push_ctxt = xmlCreatePushParserCtxt(NULL, NULL, NULL, 0, url);
     Py_XDECREF(uri_hold);
     if (self->push_ctxt == NULL) {
+        LibXML_sax_free(st);
         config_clear(&cfg);
         PyErr_NoMemory();
         return -1;
+    }
+    if (st != NULL) {
+        LibXML_sax_attach(st, self->push_ctxt);
+        self->push_sax = st;
     }
     xmlCtxtUseOptions(self->push_ctxt, xml_options(&cfg));
     config_clear(&cfg);
@@ -1258,6 +1439,19 @@ parser_finish(LibXML_ParserObject *self, int restore)
 
     LibXML_errors_begin();
     push_feed(self, "", 0, 1);
+
+    if (self->push_sax != NULL) {
+        /* The state outlives the context for end_document. */
+        LibXML_SaxState *st = self->push_sax;
+        int well_formed = self->push_ctxt->wellFormed;
+        LibXML_sax_detach(st);
+        self->push_sax = NULL;
+        push_free(self);
+        PyObject *result = finish_sax(st, restore || well_formed, restore ? 1 : 0, 1);
+        LibXML_sax_free(st);
+        config_clear(&cfg);
+        return result;
+    }
 
     xmlParserCtxtPtr ctxt = self->push_ctxt;
     int well_formed = ctxt->wellFormed;
@@ -1519,13 +1713,14 @@ static int
 parser_traverse(LibXML_ParserObject *self, visitproc visit, void *arg)
 {
     Py_VISIT(self->extra);
-    return 0;
+    return LibXML_sax_traverse(self->push_sax, visit, arg);
 }
 
 static int
 parser_clear(LibXML_ParserObject *self)
 {
     Py_CLEAR(self->extra);
+    LibXML_sax_clear(self->push_sax);
     return 0;
 }
 
@@ -1561,6 +1756,8 @@ static PyMethodDef LibXML_Parser_methods[] = {
     {"load_html",            (PyCFunction)parser_load_html,            METH_VARARGS|METH_KEYWORDS, "Load HTML (string=, location= or IO=), with options"},
     {"parse_balanced_chunk", (PyCFunction)parser_parse_balanced_chunk, METH_VARARGS,               "Parse a well-balanced XML fragment"},
     {"parse_xml_chunk",      (PyCFunction)parser_parse_balanced_chunk, METH_VARARGS,               "Parse a well-balanced XML fragment"},
+    {"set_handler",          (PyCFunction)parser_set_handler,          METH_VARARGS|METH_KEYWORDS, "Send the events of the parses to a SAX handler, or None"},
+    {"_parse_sax_chunk",     (PyCFunction)parser_sax_chunk,            METH_VARARGS,               "Send the events of a chunk to the handler, without end_document"},
     {"init_push",            (PyCFunction)parser_init_push,            METH_NOARGS,                "Start a push parse"},
     {"push",                 (PyCFunction)parser_push,                 METH_VARARGS,               "Give chunks to the push parser"},
     {"parse_chunk",          (PyCFunction)parser_parse_chunk,          METH_VARARGS|METH_KEYWORDS, "Give a chunk to the push parser, and finish if terminate is true"},
