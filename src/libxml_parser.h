@@ -12,6 +12,9 @@ typedef struct {
 
 extern PyTypeObject LibXML_ParserType;
 
+/* doc.process_xinclude(options): options is a dict or NULL. */
+PyObject *LibXML_process_xinclude(PyObject *doc, PyObject *options);
+
 /* Parse a well-balanced chunk into a DocumentFragment. */
 PyObject *LibXML_parse_chunk(const char *chunk, int keep_blanks);
 

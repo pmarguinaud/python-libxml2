@@ -47,6 +47,7 @@ void LibXML_free_tree(xmlNodePtr top);
  * evaluation runs, trees are not freed, and the last one to end frees them. */
 void LibXML_eval_begin(void);
 void LibXML_eval_end(void);
+int  LibXML_eval_running(void);
 
 /* Free the DTDs that have left doc. */
 void LibXML_free_old_dtds(xmlNodePtr *list);
@@ -73,6 +74,11 @@ int LibXML_replace_node(xmlNodePtr old_node, xmlNodePtr new_node);
  * with its document, as entity references point into it. */
 int LibXML_set_int_subset(xmlDocPtr doc, xmlNodePtr dtd, xmlNodePtr before);
 int LibXML_set_ext_subset(xmlDocPtr doc, xmlNodePtr dtd);
+
+/* Before XInclude processing, which frees xi:include elements and what they hold:
+ * those that wrappers point into leave the tree, and a copy takes their place.
+ * Returns 0, or -1 with an exception. */
+int LibXML_xinclude_prepare(xmlDocPtr doc);
 
 /* Make node the root element of doc. The previous root is released. */
 int LibXML_set_root(xmlDocPtr doc, xmlNodePtr node);

@@ -2,7 +2,10 @@
 #include "libxml_utils.h"
 #include "libxml_document.h"
 #include "libxml_node.h"
+#include "libxml_tree.h"
 #include <libxml/parserInternals.h>
+#include <libxml/xinclude.h>
+#include <libxml/catalog.h>
 
 /* ------------------------------------------------------------------ */
 /* Options                                                             */
@@ -81,12 +84,29 @@ set_recover(int *flags, int *recover, PyObject *value)
     return 0;
 }
 
+/* A catalog is global to libxml2, as in Perl. */
+static int
+load_catalog(PyObject *filename)
+{
+    PyObject *bytes = NULL;
+    if (!PyUnicode_FSConverter(filename, &bytes)) return -1;
+
+    int rc = PyBytes_GET_SIZE(bytes) > 0 ? xmlLoadCatalog(PyBytes_AS_STRING(bytes)) : -1;
+    if (rc < 0)
+        PyErr_Format(LibXML_Error, "cannot load catalog '%s'", PyBytes_AS_STRING(bytes));
+    Py_DECREF(bytes);
+    return rc < 0 ? -1 : 0;
+}
+
 /* Returns 0, or -1 with an exception. */
 static int
 apply_option(int *flags, int *recover, PyObject *extra, const char *name, PyObject *value)
 {
     if (strcmp(name, "recover") == 0)
         return set_recover(flags, recover, value);
+
+    if (strcmp(name, "catalog") == 0)
+        return value == Py_None ? 0 : load_catalog(value);
 
     if (strcmp(name, "keep_blanks") == 0) {
         int truth = PyObject_IsTrue(value);
@@ -174,6 +194,7 @@ xml_options(const ParseConfig *cfg)
 /* ------------------------------------------------------------------ */
 
 static xmlExternalEntityLoader saved_loader = NULL;
+static const ParseConfig *active_cfg = NULL;    /* for contexts made by libxml2 */
 
 /* These calls are deprecated in recent libxml2, without a replacement that
  * also exists in older ones. */
@@ -184,6 +205,7 @@ static xmlParserInputPtr
 entity_loader(const char *url, const char *id, xmlParserCtxtPtr ctxt)
 {
     ParseConfig *cfg = ctxt ? (ParseConfig *)ctxt->_private : NULL;
+    if (cfg == NULL) cfg = (ParseConfig *)active_cfg;
     PyObject *handler = cfg ? PyDict_GetItemString(cfg->extra, "ext_ent_handler") : NULL;
 
     if (handler == NULL || handler == Py_None || PyErr_Occurred())
@@ -223,6 +245,7 @@ loader_begin(const ParseConfig *cfg)
     if (handler != NULL && handler != Py_None) {
         saved_loader = xmlGetExternalEntityLoader();
         xmlSetExternalEntityLoader(entity_loader);
+        active_cfg = cfg;
     }
 }
 
@@ -233,6 +256,7 @@ loader_end(const ParseConfig *cfg)
     if (handler != NULL && handler != Py_None) {
         xmlSetExternalEntityLoader(saved_loader);
         saved_loader = NULL;
+        active_cfg = NULL;
     }
 }
 
@@ -430,6 +454,104 @@ config_uri(const ParseConfig *cfg, PyObject **hold)
     return *hold ? PyUnicode_AsUTF8(*hold) : NULL;
 }
 
+/* Returns 0, or -1 with an exception. */
+static int
+run_xinclude(ParseConfig *cfg, xmlDocPtr doc)
+{
+    if (LibXML_eval_running()) {
+        PyErr_SetString(LibXML_Error, "cannot process XIncludes during an XPath evaluation");
+        return -1;
+    }
+    if (LibXML_xinclude_prepare(doc) < 0)
+        return -1;
+
+    LibXML_errors_begin();
+    loader_begin(cfg);
+    int rc = xmlXIncludeProcessFlags(doc, xml_options(cfg));
+    loader_end(cfg);
+
+    if (PyErr_Occurred()) {
+        PyObject *type, *value, *tb;
+        PyErr_Fetch(&type, &value, &tb);
+        LibXML_errors_begin();
+        PyErr_Restore(type, value, tb);
+        return -1;
+    }
+    if (LibXML_report_errors(quiet_recover(cfg->recover, cfg->flags)) < 0)
+        return -1;
+    if (rc < 0) {
+        PyErr_SetString(LibXML_Error, "unknown error during XInclude processing");
+        return -1;
+    }
+    return rc;
+}
+
+/* The options of a process_xinclude call, a dict, with keywords on top */
+static PyObject *
+xinclude_options(PyObject *options, PyObject *kwds)
+{
+    PyObject *merged = PyDict_New();
+    if (merged == NULL) return NULL;
+    if (options != NULL && options != Py_None) {
+        if (!PyDict_Check(options)) {
+            PyErr_SetString(PyExc_TypeError, "the options must be a dict");
+            Py_DECREF(merged);
+            return NULL;
+        }
+        if (PyDict_Update(merged, options) < 0) {
+            Py_DECREF(merged);
+            return NULL;
+        }
+    }
+    if (kwds != NULL && PyDict_Update(merged, kwds) < 0) {
+        Py_DECREF(merged);
+        return NULL;
+    }
+    return merged;
+}
+
+/* True or the count of substitutions, as Perl: never 0, so it reads as success. */
+static PyObject *
+parser_processXIncludes(LibXML_ParserObject *self, PyObject *args, PyObject *kwds)
+{
+    PyObject *doc, *options = NULL;
+    if (!PyArg_ParseTuple(args, "O!|O", &LibXML_DocumentType, &doc, &options))
+        return NULL;
+
+    PyObject *merged = xinclude_options(options, kwds);
+    if (merged == NULL) return NULL;
+
+    ParseConfig cfg;
+    int rc = config_init(&cfg, self, merged);
+    Py_DECREF(merged);
+    if (rc < 0) return NULL;
+
+    rc = run_xinclude(&cfg, LibXML_DOC(doc));
+    config_clear(&cfg);
+    if (rc < 0) return NULL;
+    return PyLong_FromLong(rc == 0 ? 1 : rc);
+}
+
+PyObject *
+LibXML_process_xinclude(PyObject *doc, PyObject *options)
+{
+    PyObject *parser = PyObject_CallObject((PyObject *)&LibXML_ParserType, NULL);
+    if (parser == NULL) return NULL;
+    PyObject *result = PyObject_CallMethod(parser, "processXIncludes", "OO", doc,
+                                           options ? options : Py_None);
+    Py_DECREF(parser);
+    return result;
+}
+
+static PyObject *
+parser_load_catalog(PyObject *cls, PyObject *args)
+{
+    PyObject *filename;
+    if (!PyArg_ParseTuple(args, "O", &filename)) return NULL;
+    if (load_catalog(filename) < 0) return NULL;
+    Py_RETURN_NONE;
+}
+
 /* Parse from memory, or from a file if filename is set. */
 static PyObject *
 parse_xml(ParseConfig *cfg, const Input *in, const char *filename,
@@ -487,7 +609,14 @@ parse_xml(ParseConfig *cfg, const Input *in, const char *filename,
 
     xmlFree(declared);
     Py_XDECREF(uri_hold);
-    return finish_parse(doc, acceptable, quiet_recover(cfg->recover, cfg->flags));
+
+    PyObject *result = finish_parse(doc, acceptable, quiet_recover(cfg->recover, cfg->flags));
+    if (result != NULL && (cfg->flags & XML_PARSE_XINCLUDE)
+        && run_xinclude(cfg, LibXML_DOC(result)) < 0) {
+        Py_DECREF(result);
+        return NULL;
+    }
+    return result;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1144,6 +1273,9 @@ static PyMethodDef LibXML_Parser_methods[] = {
     {"parse_html_fh",        (PyCFunction)parser_parse_html_fh,        METH_VARARGS|METH_KEYWORDS, "Parse HTML from a file object"},
     {"load_html",            (PyCFunction)parser_load_html,            METH_VARARGS|METH_KEYWORDS, "Load HTML (string=, location= or IO=), with options"},
     {"parse_balanced_chunk", (PyCFunction)parser_parse_balanced_chunk, METH_VARARGS,               "Parse a well-balanced XML fragment"},
+    {"process_xincludes",    (PyCFunction)parser_processXIncludes,     METH_VARARGS|METH_KEYWORDS, "Process the XIncludes of a document"},
+    {"processXIncludes",     (PyCFunction)parser_processXIncludes,     METH_VARARGS|METH_KEYWORDS, "Process the XIncludes of a document"},
+    {"load_catalog",         (PyCFunction)parser_load_catalog,         METH_VARARGS|METH_CLASS,    "Load a catalog, for all parsers"},
     {"option_exists",        (PyCFunction)parser_option_exists,        METH_VARARGS,               "Tell if an option has this name"},
     {"get_option",           (PyCFunction)parser_get_option,           METH_VARARGS,               "Get an option"},
     {"set_option",           (PyCFunction)parser_set_option,           METH_VARARGS,               "Set an option"},

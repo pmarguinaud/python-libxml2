@@ -10,6 +10,7 @@
 #include "libxml_parser.h"
 #include "libxml_namespace.h"
 #include "libxml_dtd.h"
+#include "libxml_schema.h"
 
 PyObject *LibXML_Error = NULL;
 
@@ -34,6 +35,10 @@ PyInit__libxml(void)
     if (PyType_Ready(&LibXML_PIType) < 0) return NULL;
     if (PyType_Ready(&LibXML_AttrType) < 0) return NULL;
     if (PyType_Ready(&LibXML_DtdType) < 0) return NULL;
+    if (PyType_Ready(&LibXML_RelaxNGType) < 0) return NULL;
+    if (PyType_Ready(&LibXML_SchemaType) < 0) return NULL;
+    if (PyType_Ready(&LibXML_PatternType) < 0) return NULL;
+    if (PyType_Ready(&LibXML_RegExpType) < 0) return NULL;
     if (PyType_Ready(&LibXML_NamespaceType) < 0) return NULL;
     if (PyType_Ready(&LibXML_XPathContextType) < 0) return NULL;
     if (PyType_Ready(&LibXML_XPathExpressionType) < 0) return NULL;
@@ -74,6 +79,10 @@ PyInit__libxml(void)
     ADD_TYPE("PI",               LibXML_PIType)
     ADD_TYPE("Attr",             LibXML_AttrType)
     ADD_TYPE("Dtd",              LibXML_DtdType)
+    ADD_TYPE("RelaxNG",          LibXML_RelaxNGType)
+    ADD_TYPE("Schema",           LibXML_SchemaType)
+    ADD_TYPE("Pattern",          LibXML_PatternType)
+    ADD_TYPE("RegExp",           LibXML_RegExpType)
     ADD_TYPE("Namespace",        LibXML_NamespaceType)
     ADD_TYPE("XPathContext",     LibXML_XPathContextType)
     ADD_TYPE("XPathExpression",  LibXML_XPathExpressionType)

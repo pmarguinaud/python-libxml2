@@ -3,6 +3,7 @@
 #include "libxml_utils.h"
 #include "libxml_tree.h"
 #include "libxml_dtd.h"
+#include "libxml_parser.h"
 #include "libxml_nodelist.h"
 #include "libxml_element.h"
 #include "libxml_text.h"
@@ -610,6 +611,14 @@ doc_createDocument(PyObject *cls, PyObject *args)
 }
 
 static PyObject *
+doc_process_xinclude(LibXML_NodeObject *self, PyObject *args)
+{
+    PyObject *options = NULL;
+    if (!PyArg_ParseTuple(args, "|O", &options)) return NULL;
+    return LibXML_process_xinclude((PyObject *)self, options);
+}
+
+static PyObject *
 doc_getVersion(LibXML_NodeObject *self, PyObject *args)
 {
     return doc_get_version(self, NULL);
@@ -1057,6 +1066,7 @@ static PyMethodDef LibXML_Document_methods[] = {
     {"setDocumentElement",    (PyCFunction)doc_setDocumentElement,    METH_VARARGS, "Set root element"},
     {"compression",           (PyCFunction)doc_compression,           METH_NOARGS,  "Get compression level"},
     {"is_valid",              (PyCFunction)doc_is_valid,              METH_VARARGS, "Tell if the document follows its DTD, or the one given"},
+    {"process_xinclude",      (PyCFunction)doc_process_xinclude,      METH_VARARGS, "Process XIncludes, with a dict of parser options"},
     {"validate",              (PyCFunction)doc_validate,              METH_VARARGS, "Raise an Error unless the document follows its DTD, or the one given"},
     {"createDocument",        (PyCFunction)doc_createDocument,        METH_VARARGS|METH_CLASS, "New document: (version, encoding) or (uri, name, dtd)"},
     {"createRawElement",      (PyCFunction)doc_createRawElement,      METH_VARARGS, "Create an element without checking its name"},

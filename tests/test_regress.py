@@ -643,6 +643,66 @@ print(d2.is_valid(dtd), d2.getElementById('m').nodeName)
 print(d2.documentElement.firstChild.getAttributeNode('xml:id').isId())""",
      'False a b\nTrue a b\nFalse b\nFalse b\nTrue')
 
+XI_DOC = '''<a xmlns:xi="http://www.w3.org/2001/XInclude"><xi:include href="no.xml"><xi:fallback><b/></xi:fallback></xi:include></a>'''
+
+case('xinclude_node_keeps_namespace_after_doc', """
+d = P.parse_string(%r)
+d.process_xinclude()
+start = d.documentElement.firstChild
+print(start.nodeType, start.nextSibling.nextSibling.nodeType)
+print(d.documentElement.removeChild(start).nodeType)
+del d
+import gc; gc.collect()
+print(start.nodeName, start.namespaceURI)""" % XI_DOC, '19 20\n19\ninclude None')
+
+case('attr_replaced_holds_last_ref', """
+e = X.Element('a')
+e.setAttribute('x', '1')
+a = e.getAttributeNode('x')
+del e
+new = X.Attr('x', '2')
+a.addSibling(new)
+print(new.ownerElement.toString(), a.value, a.ownerElement)""", '<a x="2"/> 1 None')
+
+case('xinclude_root_wrapped', """
+d = P.parse_string('<xi:include xmlns:xi="http://www.w3.org/2001/XInclude" href="no.xml"><xi:fallback><b/></xi:fallback></xi:include>')
+root = d.documentElement
+d.process_xinclude({'no_xinclude_nodes': 1})
+print(d.documentElement.nodeName, root.nodeName, root.parentNode)""", 'b xi:include None')
+
+case('schema_outlives_its_document', """
+d = P.parse_string('<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="a" type="xs:string"/></xs:schema>')
+s = X.Schema(DOM=d)
+d.documentElement.removeChildNodes()
+del d
+print(s.validate(P.parse_string('<a>t</a>')))""", '0')
+
+case('leak_relaxng', """
+text = '<element name="a" xmlns="http://relaxng.org/ns/structure/1.0"><text/></element>'
+doc = P.parse_string('<a>t</a>')
+print(grows(lambda: X.RelaxNG(string=text), 20000))
+rng = X.RelaxNG(string=text)
+print(grows(lambda: rng.validate(doc), 40000))""", 'False\nFalse')
+
+case('leak_schema', """
+text = '<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="a" type="xs:string"/></xs:schema>'
+doc = P.parse_string('<a>t</a>')
+print(grows(lambda: X.Schema(string=text), 20000))
+s = X.Schema(string=text)
+print(grows(lambda: s.validate(doc), 40000))""", 'False\nFalse')
+
+case('leak_pattern_regexp', """
+doc = P.parse_string('<a/>')
+print(grows(lambda: X.Pattern('p:a', {'p': 'urn:p'}).matchesNode(doc)))
+print(grows(lambda: X.RegExp('[0-9]+').matches('12')))""", 'False\nFalse')
+
+case('leak_xinclude', """
+def f():
+    d = P.parse_string(%r)
+    b = d.documentElement.firstChild.firstChild
+    d.process_xinclude()
+print(grows(f, 40000))""" % XI_DOC, 'False')
+
 case('dtd_keeps_entities_of_moved_refs', """
 P2 = X.Parser(expand_entities=0)
 d = P2.parse_string('<!DOCTYPE a [<!ENTITY e "v">]><a>&e;</a>')

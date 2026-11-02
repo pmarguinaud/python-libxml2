@@ -11,6 +11,10 @@ from xml_libxml._libxml import (
     Attr,
     Namespace,
     Dtd,
+    RelaxNG,
+    Schema,
+    Pattern,
+    RegExp,
     NodeList,
     XPathContext,
     XPathExpression,
@@ -60,6 +64,7 @@ from xml_libxml.Common import decodeFromUTF8, encodeToUTF8
 
 
 createDocument = Document.createDocument
+load_catalog = Parser.load_catalog
 
 
 def load_xml(*args, **options):
@@ -75,9 +80,9 @@ def load_html(*args, **options):
 __version__ = '0.1.0'
 __all__ = [
     'Parser', 'Document', 'Node', 'Element', 'Text', 'Comment',
-    'CDATASection', 'PI', 'Attr', 'Namespace', 'Dtd', 'NodeList', 'XPathContext', 'XPathExpression',
+    'CDATASection', 'PI', 'Attr', 'Namespace', 'Dtd', 'RelaxNG', 'Schema', 'Pattern', 'RegExp', 'NodeList', 'XPathContext', 'XPathExpression',
     'Literal', 'Number', 'Boolean', 'DocumentFragment',
-    'Error', 'ErrNo', 'Common', 'load_xml', 'load_html', 'createDocument',
+    'Error', 'ErrNo', 'Common', 'load_xml', 'load_html', 'createDocument', 'load_catalog',
     'AttributeHash', 'NamedNodeMap', 'encodeToUTF8', 'decodeFromUTF8',
     'XML_ELEMENT_NODE', 'XML_ATTRIBUTE_NODE', 'XML_TEXT_NODE',
     'XML_CDATA_SECTION_NODE', 'XML_ENTITY_REF_NODE', 'XML_ENTITY_NODE',

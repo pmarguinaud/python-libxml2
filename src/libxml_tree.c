@@ -21,7 +21,8 @@ LibXML_walk_tree(xmlNodePtr top, LibXML_visit_fn visit, void *arg)
     for (;;) {
         visit(cur, arg);
 
-        if (cur->type == XML_ELEMENT_NODE) {
+        if (cur->type == XML_ELEMENT_NODE || cur->type == XML_XINCLUDE_START
+            || cur->type == XML_XINCLUDE_END) {
             for (xmlAttrPtr attr = cur->properties; attr; attr = attr->next) {
                 visit((xmlNodePtr)attr, arg);
                 for (xmlNodePtr c = attr->children; c; c = c->next)
@@ -168,6 +169,12 @@ void
 LibXML_eval_begin(void)
 {
     evals_running++;
+}
+
+int
+LibXML_eval_running(void)
+{
+    return evals_running > 0;
 }
 
 void
@@ -379,7 +386,9 @@ reconcile_attr(xmlAttrPtr attr, Reconcile *rec)
 static void
 reconcile_node(xmlNodePtr node, void *arg)
 {
-    if (node->type == XML_ELEMENT_NODE)
+    /* What is left of an xi:include has the namespace it had. */
+    if (node->type == XML_ELEMENT_NODE || node->type == XML_XINCLUDE_START
+        || node->type == XML_XINCLUDE_END)
         reconcile_element(node, (Reconcile *)arg);
     else if (node->type == XML_ATTRIBUTE_NODE)
         reconcile_attr((xmlAttrPtr)node, (Reconcile *)arg);
@@ -550,6 +559,117 @@ LibXML_release_node(xmlNodePtr node)
 }
 
 /* ------------------------------------------------------------------ */
+/* XInclude                                                            */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    xmlNodePtr *nodes;
+    Py_ssize_t  count, size;
+    int         failed;
+} NodeStack;
+
+static int
+is_xinclude(xmlNodePtr node)
+{
+    return node->type == XML_ELEMENT_NODE && node->ns != NULL
+        && xmlStrEqual(node->name, BAD_CAST "include")
+        && (xmlStrEqual(node->ns->href, BAD_CAST "http://www.w3.org/2003/XInclude")
+            || xmlStrEqual(node->ns->href, BAD_CAST "http://www.w3.org/2001/XInclude"));
+}
+
+static void
+stack_push(NodeStack *stack, xmlNodePtr node)
+{
+    if (stack->count == stack->size) {
+        Py_ssize_t size = stack->size ? 2 * stack->size : 16;
+        xmlNodePtr *nodes = PyMem_Realloc(stack->nodes, size * sizeof(xmlNodePtr));
+        if (nodes == NULL) {
+            stack->failed = 1;
+            return;
+        }
+        stack->nodes = nodes;
+        stack->size = size;
+    }
+    stack->nodes[stack->count++] = node;
+}
+
+static void
+note_xinclude(xmlNodePtr node, void *arg)
+{
+    if (is_xinclude(node))
+        stack_push((NodeStack *)arg, node);
+}
+
+static void
+note_marker(xmlNodePtr node, void *arg)
+{
+    if (node->type == XML_XINCLUDE_START || node->type == XML_XINCLUDE_END)
+        stack_push((NodeStack *)arg, node);
+}
+
+/* xmlDOMWrapAdoptNode stops at the nodes XInclude leaves around what it includes,
+ * with part of the tree in each document. They are empty and never written, so they
+ * stay behind. Returns 0, or -1 with an exception. */
+static int
+drop_xinclude_markers(xmlNodePtr top)
+{
+    NodeStack stack = { NULL, 0, 0, 0 };
+
+    LibXML_walk_tree(top, note_marker, &stack);
+    if (stack.failed) {
+        PyMem_Free(stack.nodes);
+        PyErr_NoMemory();
+        return -1;
+    }
+    for (Py_ssize_t i = 0; i < stack.count; i++) {
+        if (stack.nodes[i] != top)
+            LibXML_release_node(stack.nodes[i]);
+    }
+    PyMem_Free(stack.nodes);
+    return 0;
+}
+
+int
+LibXML_xinclude_prepare(xmlDocPtr doc)
+{
+    NodeStack stack = { NULL, 0, 0, 0 };
+    int rc = 0;
+
+    LibXML_walk_tree((xmlNodePtr)doc, note_xinclude, &stack);
+    if (stack.failed) {
+        PyErr_NoMemory();
+        rc = -1;
+    }
+
+    for (Py_ssize_t i = 0; rc == 0 && i < stack.count; i++) {
+        xmlNodePtr node = stack.nodes[i], up;
+        int has_wrapper = 0;
+
+        /* An xi:include inside another one goes with it. */
+        for (up = node->parent; up != NULL && !is_xinclude(up); up = up->parent)
+            ;
+        if (up != NULL)
+            continue;
+
+        LibXML_walk_tree(node, find_wrapper, &has_wrapper);
+        if (!has_wrapper)
+            continue;
+
+        xmlNodePtr copy = xmlDocCopyNode(node, doc, 1);
+        if (copy == NULL || xmlAddPrevSibling(node, copy) == NULL) {
+            if (copy != NULL) xmlFreeNode(copy);
+            PyErr_NoMemory();
+            rc = -1;
+            break;
+        }
+        LibXML_release_node(node);
+    }
+
+    PyMem_Free(stack.nodes);
+    return rc;
+}
+
+/* ------------------------------------------------------------------ */
 /* Setting text                                                        */
 /* ------------------------------------------------------------------ */
 
@@ -713,6 +833,9 @@ adopt_unlinked(xmlNodePtr node, xmlDocPtr doc, xmlNodePtr parent)
     if (node->doc == doc)
         return 0;
 
+    if (drop_xinclude_markers(node) < 0)
+        return -1;
+
     /* A document cannot be used to look up namespaces. */
     if (parent != NULL && parent->type != XML_ELEMENT_NODE)
         parent = NULL;
@@ -775,17 +898,26 @@ attach_attr(xmlAttrPtr attr, xmlNodePtr element)
     if (adopt_unlinked((xmlNodePtr)attr, element->doc, element) < 0)
         return -1;
 
+    /* The attribute replaced may hold the last reference to the tree of element. */
+    PyObject *keep = LibXML_Node_Wrap(element);
+    if (keep == NULL) {
+        LibXML_fix_owner((xmlNodePtr)attr);
+        return -1;
+    }
+
     xmlAttrPtr same = LibXML_find_same_attr(element, attr);
     if (same != NULL)
         LibXML_release_node((xmlNodePtr)same);
 
     if (xmlAddChild(element, (xmlNodePtr)attr) == NULL) {
         LibXML_fix_owner((xmlNodePtr)attr);
+        Py_DECREF(keep);
         PyErr_SetString(LibXML_Error, "cannot attach attribute");
         return -1;
     }
     reconcile_ns((xmlNodePtr)attr);
     LibXML_fix_owner((xmlNodePtr)attr);
+    Py_DECREF(keep);
     return 0;
 }
 

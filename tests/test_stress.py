@@ -28,7 +28,12 @@ SOURCES = [
     '<r xmlns:p="urn:p" p:q="1"><p:s>one<p:t/></p:s><u xmlns="urn:u"><v/></u></r>',
     '<!DOCTYPE m [<!ATTLIST m id ID #IMPLIED>]><m id="k"><n>x</n><?pi data?></m>',
     '<!DOCTYPE e [<!ELEMENT e ANY><!ENTITY ent "val<i/>">]><e a="x">&ent;<f/></e>',
+    '<x xmlns:xi="http://www.w3.org/2001/XInclude"><xi:include href="missing.xml">'
+    '<xi:fallback><y q="1">z<w/></y><xi:include href="other.xml"><xi:fallback/></xi:include>'
+    '</xi:fallback></xi:include><xi:include href="#xpointer(/x/k)"/><k>n</k></x>',
 ]
+RNG = '''<element name="a" xmlns="http://relaxng.org/ns/structure/1.0"><text/></element>'''
+XSD = '''<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="a" type="xs:string"/></xs:schema>'''
 PARSER = X.Parser(expand_entities=0)
 docs = [PARSER.parse_string(s) for s in SOURCES]
 pool = []
@@ -251,9 +256,32 @@ def op_attributes():
     ])()
 
 
+def op_xinclude():
+    d = pick_doc()
+    if rng.random() < 0.5:
+        docs.append(PARSER.parse_string(SOURCES[-1]))
+        del docs[:-6]
+        d = docs[-1]
+        for node in d.findnodes('//*'):
+            if rng.random() < 0.5:
+                remember(node)
+    d.process_xinclude({'no_xinclude_nodes': rng.randint(0, 1)})
+
+
+def op_schema():
+    a = pick()
+    rng.choice([
+        lambda: X.RelaxNG(string=RNG).validate(pick_doc()),
+        lambda: X.Schema(string=XSD).validate(a),
+        lambda: X.Schema(DOM=X.Parser().parse_string(XSD)).validate(pick_doc()),
+        lambda: X.Pattern(rng.choice(['a', '//b', 'p:s', './/*'])).matchesNode(a),
+        lambda: X.Pattern('p:s | a/b', {'p': 'urn:p'}).matchesNode(a),
+    ])()
+
+
 OPS = [op_grab, op_create, op_fragment, op_move, op_move, op_move,
        op_documents, op_content, op_content, op_forget, op_xpath_callback,
-       op_dtd, op_dtd, op_attributes]
+       op_dtd, op_dtd, op_attributes, op_xinclude, op_schema]
 
 for doc in docs:
     remember(doc.documentElement)
