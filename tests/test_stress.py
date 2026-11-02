@@ -337,9 +337,43 @@ def op_push():
             remember(doc.documentElement)
 
 
+readers = []
+
+
+def op_reader():
+    if not readers or rng.random() < 0.2:
+        if rng.random() < 0.3:
+            readers.append(X.Reader(DOM=pick_doc()))
+        else:
+            readers.append(X.Reader(string=rng.choice(SOURCES + [INCLUDE, ENTITY_DOC]),
+                                    expand_entities=rng.randint(0, 1)))
+        del readers[:-3]
+    reader = rng.choice(readers)
+    for _ in range(rng.randint(1, 4)):
+        rng.choice([
+            reader.read, reader.read, reader.next, reader.nextSibling, reader.skipSiblings,
+            lambda: reader.nextElement(rng.choice([None, 'b', 'm', 'e'])),
+            lambda: remember(reader.copyCurrentNode(rng.randint(0, 1))),
+            lambda: remember(reader.preserveNode()),
+            lambda: remember(reader.document()),
+            lambda: reader.preservePattern(rng.choice(['//b', 'c', '//*'])),
+            lambda: reader.readOuterXml(),
+            lambda: reader.readInnerXml(),
+            lambda: (reader.moveToFirstAttribute(), reader.readAttributeValue()),
+            lambda: (reader.moveToNextAttribute(), remember(reader.copyCurrentNode())),
+            reader.moveToElement, reader.getAttributeHash, reader.nodePath,
+            lambda: reader.document() and remember(rng.choice(
+                reader.document().findnodes('//node()') or [None])),
+            lambda: reader.finish() if rng.random() < 0.2 else None,
+            lambda: reader.close() if rng.random() < 0.1 else None,
+            lambda: readers.remove(reader) if rng.random() < 0.1 else None,
+        ])()
+
+
 OPS = [op_grab, op_create, op_fragment, op_move, op_move, op_move,
        op_documents, op_content, op_content, op_forget, op_xpath_callback,
-       op_dtd, op_dtd, op_attributes, op_xinclude, op_schema, op_callbacks, op_push]
+       op_dtd, op_dtd, op_attributes, op_xinclude, op_schema, op_callbacks, op_push,
+       op_reader, op_reader]
 
 for doc in docs:
     remember(doc.documentElement)
@@ -357,6 +391,7 @@ for doc in docs:
     doc.toString()
 del pool[:]
 del docs[:]
+del readers[:]
 gc.collect()
 print('done')
 """ % {'root': ROOT}

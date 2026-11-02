@@ -778,6 +778,58 @@ import gc; gc.collect()
 d.documentElement.removeChild(end)
 print(d.toString().count('<b/>'))""", '19 20\n1')
 
+READER_XML = '''<html><head><title>David</title></head><body><p a="1">x</p><p/></body></html>'''
+
+case('leak_reader', """
+text = %r
+def plain():
+    r = X.Reader(string=text)
+    while r.read(): pass
+def preserved():
+    r = X.Reader(string=text)
+    node = None
+    while r.read():
+        node = node or r.preserveNode()
+    r.document()
+def copies():
+    r = X.Reader(string=text)
+    while r.read():
+        r.copyCurrentNode(1)
+def dropped():
+    r = X.Reader(string=text)
+    r.read()
+    r.preserveNode()
+print(grows(plain, 20000), grows(preserved, 20000), grows(copies, 20000), grows(dropped, 20000))""" % READER_XML,
+     'False False False False')
+
+case('reader_node_after_everything_is_gone', """
+r = X.Reader(string=%r)
+r.nextElement('p')
+node = r.preserveNode()
+doc = r.document()
+nodes = doc.findnodes('//*')
+while r.read(): pass
+del r, doc
+import gc; gc.collect()
+print(node.toString(), [n.nodeName for n in nodes])""" % READER_XML,
+     """<p a="1">x</p> ['html', 'body', 'p', 'p']""")
+
+case('xpath_result_in_a_tree_removed_by_a_callback', """
+import gc
+d = P.parse_string('<r xmlns:p="urn:p"><p:s>one<p:t/></p:s></r>')
+root = d.documentElement
+x = X.XPathContext(d)
+x.registerNs('p', 'urn:p')
+def m():
+    root.removeChildNodes()
+    return True
+x.registerFunction('m', m)
+t = x.findnodes('//p:t[m()]')[0]
+d.removeChild(root)
+del root, x
+gc.collect()
+print(t.nodeName, t.namespaceURI, t.prefix, t.parentNode.nodeName)""", 'p:t urn:p p p:s')
+
 case('dtd_keeps_entities_of_moved_refs', """
 P2 = X.Parser(expand_entities=0)
 d = P2.parse_string('<!DOCTYPE a [<!ENTITY e "v">]><a>&e;</a>')

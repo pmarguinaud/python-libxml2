@@ -33,6 +33,10 @@ PyObject *LibXML_new_hidden_doc(void);
 /* Call a function of _dom.py with one argument, and a second unless NULL. */
 PyObject *LibXML_dom_call(const char *name, PyObject *arg1, PyObject *arg2);
 
+/* While a Reader goes through a document, the document cannot change: the reader
+ * holds pointers into it. Returns 0, or -1 with an Error. */
+int LibXML_check_unlocked(xmlNodePtr node);
+
 /* Check an element or attribute name. Returns 0, or -1 with an exception set. */
 int LibXML_check_name(const char *name);
 

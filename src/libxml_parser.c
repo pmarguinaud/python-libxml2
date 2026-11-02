@@ -400,6 +400,19 @@ config_uri(const ParseConfig *cfg, PyObject **hold)
     return *hold ? PyUnicode_AsUTF8(*hold) : NULL;
 }
 
+int
+LibXML_parser_options(PyObject *options, int *flags, int *recover, PyObject *extra)
+{
+    ParseConfig cfg;
+    cfg.flags = XML_PARSE_NONET;
+    cfg.recover = 0;
+    cfg.extra = extra;
+    if (apply_options(&cfg.flags, &cfg.recover, extra, options) < 0) return -1;
+    *flags = xml_options(&cfg);
+    *recover = quiet_recover(cfg.recover, cfg.flags);
+    return 0;
+}
+
 /* Returns 0, or -1 with an exception. */
 static int
 run_xinclude(ParseConfig *cfg, xmlDocPtr doc)

@@ -186,6 +186,7 @@ relaxng_validate(RelaxNGObject *self, PyObject *args)
     LibXML_NodeObject *doc;
     if (!PyArg_ParseTuple(args, "O!", &LibXML_DocumentType, &doc)) return NULL;
 
+    if (LibXML_check_unlocked(doc->node) < 0) return NULL;
     LibXML_errors_begin();
     xmlRelaxNGValidCtxtPtr ctxt = xmlRelaxNGNewValidCtxt(self->schema);
     if (ctxt == NULL) return PyErr_NoMemory();
@@ -199,6 +200,12 @@ static PyMethodDef relaxng_methods[] = {
      "Return 0 if the document is valid, raise an Error otherwise"},
     {NULL, NULL}
 };
+
+xmlRelaxNGPtr
+LibXML_relaxng_ptr(PyObject *obj)
+{
+    return PyObject_TypeCheck(obj, &LibXML_RelaxNGType) ? ((RelaxNGObject *)obj)->schema : NULL;
+}
 
 PyTypeObject LibXML_RelaxNGType = {
     PyVarObject_HEAD_INIT(NULL, 0)
@@ -295,6 +302,7 @@ schema_validate(SchemaObject *self, PyObject *args)
         return NULL;
     }
 
+    if (LibXML_check_unlocked(node->node) < 0) return NULL;
     LibXML_errors_begin();
     xmlSchemaValidCtxtPtr ctxt = xmlSchemaNewValidCtxt(self->schema);
     if (ctxt == NULL) return PyErr_NoMemory();
@@ -309,6 +317,12 @@ static PyMethodDef schema_methods[] = {
      "Return 0 if the document or element is valid, raise an Error otherwise"},
     {NULL, NULL}
 };
+
+xmlSchemaPtr
+LibXML_schema_ptr(PyObject *obj)
+{
+    return PyObject_TypeCheck(obj, &LibXML_SchemaType) ? ((SchemaObject *)obj)->schema : NULL;
+}
 
 PyTypeObject LibXML_SchemaType = {
     PyVarObject_HEAD_INIT(NULL, 0)

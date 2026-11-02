@@ -220,6 +220,7 @@ node_get_nodeValue(LibXML_NodeObject *self, void *closure)
 static int
 node_set_nodeValue(LibXML_NodeObject *self, PyObject *value, void *closure)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return -1;
     const char *s = "";
     if (value != NULL && value != Py_None) {
         s = PyUnicode_AsUTF8(value);
@@ -262,6 +263,7 @@ node_getName(LibXML_NodeObject *self, PyObject *args)
 static int
 node_set_textContent(LibXML_NodeObject *self, PyObject *value, void *closure)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return -1;
     return node_set_nodeValue(self, value, closure);
 }
 
@@ -364,6 +366,7 @@ inserted_result(LibXML_NodeObject *node, xmlNodePtr first)
 static PyObject *
 node_appendChild(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     LibXML_NodeObject *child;
     if (!PyArg_ParseTuple(args, "O!", &LibXML_NodeType, &child)) return NULL;
 
@@ -391,6 +394,7 @@ parse_ref_node(PyObject *obj, xmlNodePtr *ref)
 static PyObject *
 node_insertBefore(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     LibXML_NodeObject *new_node;
     PyObject *ref_obj;
     xmlNodePtr ref;
@@ -406,6 +410,7 @@ node_insertBefore(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 node_insertAfter(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     LibXML_NodeObject *new_node;
     PyObject *ref_obj;
     xmlNodePtr ref;
@@ -434,6 +439,7 @@ node_insertAfter(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 node_removeChild(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     LibXML_NodeObject *child;
     if (!PyArg_ParseTuple(args, "O!", &LibXML_NodeType, &child)) return NULL;
 
@@ -451,6 +457,7 @@ node_removeChild(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 node_replaceChild(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     LibXML_NodeObject *new_node, *old_node;
     if (!PyArg_ParseTuple(args, "O!O!",
             &LibXML_NodeType, &new_node,
@@ -470,6 +477,7 @@ node_replaceChild(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 node_replaceNode(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     LibXML_NodeObject *new_node;
     if (!PyArg_ParseTuple(args, "O!", &LibXML_NodeType, &new_node)) return NULL;
 
@@ -481,6 +489,7 @@ node_replaceNode(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 node_removeChildNodes(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     if (LibXML_check_children(self->node) < 0) return NULL;
 
     xmlNodePtr child = self->node->children;
@@ -520,6 +529,7 @@ node_cloneNode(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 node_unbindNode(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     if (LibXML_check_detach(self->node) < 0) return NULL;
 
     LibXML_detach_node(self->node);
@@ -530,6 +540,7 @@ node_unbindNode(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 node_addSibling(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     LibXML_NodeObject *new_node;
     if (!PyArg_ParseTuple(args, "O!", &LibXML_NodeType, &new_node)) return NULL;
 
@@ -582,6 +593,7 @@ do_normalize(xmlNodePtr node)
 static PyObject *
 node_normalize(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     if (LibXML_check_children(self->node) < 0) return NULL;
 
     do_normalize(self->node);
@@ -816,6 +828,7 @@ node_attributes(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 node_setOwnerDocument(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     LibXML_NodeObject *doc_arg;
     if (!PyArg_ParseTuple(args, "O!", &LibXML_NodeType, &doc_arg)) return NULL;
 
@@ -827,6 +840,7 @@ node_setOwnerDocument(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 node_setBaseURI(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     const char *uri;
     if (!PyArg_ParseTuple(args, "s", &uri)) return NULL;
     xmlNodeSetBase(self->node, BAD_CAST uri);
@@ -836,6 +850,7 @@ node_setBaseURI(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 node_setNodeName(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     const char *name;
     if (!PyArg_ParseTuple(args, "s", &name)) return NULL;
     if (LibXML_set_node_name(self->node, name) < 0) return NULL;
@@ -977,6 +992,7 @@ node_isSupported(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 node_setRawName(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     const char *name;
     if (!PyArg_ParseTuple(args, "s", &name)) return NULL;
     xmlNodeSetName(self->node, BAD_CAST name);
@@ -1190,6 +1206,7 @@ PyTypeObject LibXML_NodeType = {
 static PyObject *
 frag_addNewChild(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     const char *ns_uri = NULL, *name;
     if (!PyArg_ParseTuple(args, "zs", &ns_uri, &name)) return NULL;
     if (ns_uri && ns_uri[0] == '\0') ns_uri = NULL;

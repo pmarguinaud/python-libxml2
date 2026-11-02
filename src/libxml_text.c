@@ -19,6 +19,7 @@ chardata_get_data(LibXML_NodeObject *self, void *closure)
 static int
 chardata_set_data(LibXML_NodeObject *self, PyObject *value, void *closure)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return -1;
     if (value == NULL || value == Py_None) {
         xmlNodeSetContent(self->node, BAD_CAST "");
         return 0;
@@ -32,6 +33,7 @@ chardata_set_data(LibXML_NodeObject *self, PyObject *value, void *closure)
 static PyObject *
 chardata_setData(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     const char *data;
     if (!PyArg_ParseTuple(args, "s", &data)) return NULL;
     xmlNodeSetContent(self->node, BAD_CAST data);
@@ -71,6 +73,7 @@ chardata_substringData(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 chardata_appendData(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     const char *data;
     if (!PyArg_ParseTuple(args, "s", &data)) return NULL;
     xmlNodeAddContent(self->node, BAD_CAST data);
@@ -99,6 +102,7 @@ splice_content(LibXML_NodeObject *self, xmlChar *old, int start, int drop,
 static PyObject *
 chardata_insertData(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     int offset;
     const char *data;
     if (!PyArg_ParseTuple(args, "is", &offset, &data)) return NULL;
@@ -112,6 +116,7 @@ chardata_insertData(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 chardata_deleteData(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     int offset, length;
     if (!PyArg_ParseTuple(args, "ii", &offset, &length)) return NULL;
     if (offset < 0 || length <= 0) Py_RETURN_NONE;
@@ -177,6 +182,7 @@ chardata_replace_string(LibXML_NodeObject *self, const char *from,
 static PyObject *
 chardata_deleteDataString(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     const char *target;
     int all = 0;
     if (!PyArg_ParseTuple(args, "s|i", &target, &all)) return NULL;
@@ -186,6 +192,7 @@ chardata_deleteDataString(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 chardata_replaceData(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     int offset, length;
     const char *data;
     if (!PyArg_ParseTuple(args, "iis", &offset, &length, &data)) return NULL;
@@ -205,6 +212,7 @@ chardata_replaceData(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 chardata_replaceDataString(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     const char *old_str, *new_str;
     int all = 0;
     if (!PyArg_ParseTuple(args, "ss|i", &old_str, &new_str, &all)) return NULL;
@@ -360,6 +368,7 @@ pi_get_data(LibXML_NodeObject *self, void *closure)
 static int
 pi_set_data(LibXML_NodeObject *self, PyObject *value, void *closure)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return -1;
     return chardata_set_data(self, value, closure);
 }
 
@@ -367,6 +376,7 @@ pi_set_data(LibXML_NodeObject *self, PyObject *value, void *closure)
 static PyObject *
 pi_setData(LibXML_NodeObject *self, PyObject *args, PyObject *kwds)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     PyObject *text = NULL;
 
     if (kwds != NULL && PyDict_Size(kwds) > 0) {

@@ -137,8 +137,11 @@ LibXML_clear_private(xmlNodePtr top)
 typedef struct DeferredTree {
     xmlNodePtr top;
     PyObject *doc;      /* the tree needs its document */
+    int kept;           /* a wrapper refers to it at the end */
     struct DeferredTree *next;
 } DeferredTree;
+
+static void reconcile_ns(xmlNodePtr node);
 
 static int evals_running = 0;
 static DeferredTree *deferred = NULL;
@@ -183,14 +186,22 @@ LibXML_eval_end(void)
     if (--evals_running > 0)
         return;
 
+    /* The result of the evaluation, or a callback, may have made a tree in use. It
+     * left its tree without reconciliation, as nothing referred to it: it does now,
+     * before any tree is freed, as their namespaces can point into each other. */
+    for (DeferredTree *entry = deferred; entry; entry = entry->next) {
+        int has_wrapper = 0;
+        LibXML_walk_tree(entry->top, find_wrapper, &has_wrapper);
+        entry->kept = has_wrapper;
+        if (has_wrapper)
+            reconcile_ns(entry->top);
+    }
+
     while (deferred != NULL) {
         DeferredTree *entry = deferred;
-        int has_wrapper = 0;
 
         deferred = entry->next;
-        /* The result of the evaluation may have made it a tree in use. */
-        LibXML_walk_tree(entry->top, find_wrapper, &has_wrapper);
-        if (!has_wrapper)
+        if (!entry->kept)
             LibXML_free_tree(entry->top);
         Py_DECREF(entry->doc);
         free(entry);
@@ -645,6 +656,8 @@ LibXML_xinclude_finish(xmlDocPtr doc)
 int
 LibXML_xinclude_prepare(xmlDocPtr doc)
 {
+    if (LibXML_check_unlocked((xmlNodePtr)doc) < 0)
+        return -1;
     NodeStack stack = { NULL, 0, 0, 0 };
     int rc = 0;
 
@@ -959,6 +972,8 @@ insert_fragment(xmlNodePtr fragment, xmlNodePtr parent, xmlNodePtr before)
 int
 LibXML_insert_node(xmlNodePtr node, xmlNodePtr parent, xmlNodePtr before)
 {
+    if (LibXML_check_unlocked(node) < 0 || LibXML_check_unlocked(parent) < 0)
+        return -1;
     if (node->type == XML_ATTRIBUTE_NODE)
         return attach_attr((xmlAttrPtr)node, parent);
     if (node->type == XML_DOCUMENT_FRAG_NODE)
@@ -1028,6 +1043,8 @@ dtd_for_document(xmlNodePtr dtd, xmlDocPtr doc)
 int
 LibXML_set_int_subset(xmlDocPtr doc, xmlNodePtr dtd, xmlNodePtr before)
 {
+    if (LibXML_check_unlocked((xmlNodePtr)doc) < 0 || LibXML_check_unlocked(dtd) < 0)
+        return -1;
     xmlNodePtr parent = (xmlNodePtr)doc;
     xmlNodePtr old = (xmlNodePtr)doc->intSubset;
 
@@ -1060,6 +1077,8 @@ LibXML_set_int_subset(xmlDocPtr doc, xmlNodePtr dtd, xmlNodePtr before)
 int
 LibXML_set_ext_subset(xmlDocPtr doc, xmlNodePtr dtd)
 {
+    if (LibXML_check_unlocked((xmlNodePtr)doc) < 0 || LibXML_check_unlocked(dtd) < 0)
+        return -1;
     xmlNodePtr old = (xmlNodePtr)doc->extSubset;
 
     if (old == dtd)
@@ -1085,6 +1104,8 @@ LibXML_set_ext_subset(xmlDocPtr doc, xmlNodePtr dtd)
 int
 LibXML_replace_node(xmlNodePtr old_node, xmlNodePtr new_node)
 {
+    if (LibXML_check_unlocked(old_node) < 0 || LibXML_check_unlocked(new_node) < 0)
+        return -1;
     xmlNodePtr parent = old_node->parent;
 
     if (LibXML_check_detach(old_node) < 0)
@@ -1133,6 +1154,8 @@ LibXML_replace_node(xmlNodePtr old_node, xmlNodePtr new_node)
 int
 LibXML_set_root(xmlDocPtr doc, xmlNodePtr node)
 {
+    if (LibXML_check_unlocked((xmlNodePtr)doc) < 0 || LibXML_check_unlocked(node) < 0)
+        return -1;
     xmlNodePtr parent = (xmlNodePtr)doc;
     xmlNodePtr old_root = xmlDocGetRootElement(doc);
 
@@ -1152,6 +1175,8 @@ LibXML_set_root(xmlDocPtr doc, xmlNodePtr node)
 int
 LibXML_adopt_node(xmlNodePtr node, xmlDocPtr doc)
 {
+    if (LibXML_check_unlocked(node) < 0 || LibXML_check_unlocked((xmlNodePtr)doc) < 0)
+        return -1;
     switch (node->type) {
     case XML_ELEMENT_NODE:
     case XML_ATTRIBUTE_NODE:

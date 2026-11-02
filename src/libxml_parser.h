@@ -15,6 +15,11 @@ typedef struct {
 
 extern PyTypeObject LibXML_ParserType;
 
+/* Parser flags from a dict of options, from the defaults of Parser. Options that
+ * are not flags go to extra. Applies what Parser does before calling libxml2.
+ * Returns 0, or -1 with an exception. */
+int LibXML_parser_options(PyObject *options, int *flags, int *recover, PyObject *extra);
+
 /* doc.process_xinclude(options): options is a dict or NULL. */
 PyObject *LibXML_process_xinclude(PyObject *doc, PyObject *options);
 

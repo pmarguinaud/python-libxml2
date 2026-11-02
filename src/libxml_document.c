@@ -79,6 +79,7 @@ doc_get_documentElement(LibXML_NodeObject *self, void *closure)
 static int
 doc_set_documentElement(LibXML_NodeObject *self, PyObject *value, void *closure)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return -1;
     if (value == NULL || !LibXML_Node_Check(value)) {
         PyErr_SetString(PyExc_TypeError, "expected a Node");
         return -1;
@@ -97,6 +98,7 @@ doc_get_encoding(LibXML_NodeObject *self, void *closure)
 static int
 doc_set_encoding(LibXML_NodeObject *self, PyObject *value, void *closure)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return -1;
     xmlDocPtr doc = LibXML_DOC(self);
     if (doc->encoding) { xmlFree((xmlChar *)doc->encoding); doc->encoding = NULL; }
     if (value == Py_None || value == NULL) return 0;
@@ -124,6 +126,7 @@ doc_get_version(LibXML_NodeObject *self, void *closure)
 static int
 doc_set_version(LibXML_NodeObject *self, PyObject *value, void *closure)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return -1;
     xmlDocPtr doc = LibXML_DOC(self);
     if (doc->version) { xmlFree((xmlChar *)doc->version); doc->version = NULL; }
     if (value == Py_None || value == NULL) return 0;
@@ -143,6 +146,7 @@ doc_get_standalone(LibXML_NodeObject *self, void *closure)
 static int
 doc_set_standalone(LibXML_NodeObject *self, PyObject *value, void *closure)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return -1;
     if (value == NULL) {
         PyErr_SetString(PyExc_TypeError, "cannot delete standalone");
         return -1;
@@ -164,6 +168,7 @@ doc_get_URI(LibXML_NodeObject *self, void *closure)
 static int
 doc_set_URI(LibXML_NodeObject *self, PyObject *value, void *closure)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return -1;
     xmlDocPtr doc = LibXML_DOC(self);
     if (doc->URL) { xmlFree((xmlChar *)doc->URL); doc->URL = NULL; }
     if (value == Py_None || value == NULL) return 0;
@@ -301,6 +306,7 @@ doc_createAttribute(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 doc_createAttributeNS(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     const char *ns_uri, *qname;
     const char *value = "";
     if (!PyArg_ParseTuple(args, "zs|s", &ns_uri, &qname, &value)) return NULL;
@@ -559,6 +565,7 @@ doc_createRawElementNS(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 doc_insertPI(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     const char *target, *data = NULL;
     if (!PyArg_ParseTuple(args, "s|z", &target, &data)) return NULL;
     if (LibXML_check_name(target) < 0) return NULL;
@@ -613,6 +620,7 @@ doc_createDocument(PyObject *cls, PyObject *args)
 static PyObject *
 doc_process_xinclude(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     PyObject *options = NULL;
     if (!PyArg_ParseTuple(args, "|O", &options)) return NULL;
     return LibXML_process_xinclude((PyObject *)self, options);
@@ -665,6 +673,7 @@ doc_externalSubset(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 doc_createInternalSubset(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     const char *name, *external = NULL, *system = NULL;
     if (!PyArg_ParseTuple(args, "s|zz", &name, &external, &system)) return NULL;
 
@@ -680,6 +689,7 @@ doc_createInternalSubset(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 doc_createExternalSubset(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     const char *name, *external = NULL, *system = NULL;
     if (!PyArg_ParseTuple(args, "s|zz", &name, &external, &system)) return NULL;
 
@@ -711,6 +721,7 @@ doc_createDTD(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 doc_setInternalSubset(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     LibXML_NodeObject *dtd;
     if (!PyArg_ParseTuple(args, "O!", &LibXML_DtdType, &dtd)) return NULL;
 
@@ -722,6 +733,7 @@ doc_setInternalSubset(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 doc_setExternalSubset(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     LibXML_NodeObject *dtd;
     if (!PyArg_ParseTuple(args, "O!", &LibXML_DtdType, &dtd)) return NULL;
     if (LibXML_set_ext_subset(LibXML_DOC(self), dtd->node) < 0) return NULL;
@@ -741,12 +753,14 @@ remove_subset(xmlDtdPtr dtd)
 static PyObject *
 doc_removeInternalSubset(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     return remove_subset(xmlGetIntSubset(LibXML_DOC(self)));
 }
 
 static PyObject *
 doc_removeExternalSubset(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     return remove_subset(LibXML_DOC(self)->extSubset);
 }
 
@@ -830,6 +844,7 @@ validate_doc(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 doc_is_valid(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     int valid = validate_doc(self, args);
     if (valid < 0) return NULL;
     LibXML_errors_begin();
@@ -840,6 +855,7 @@ doc_is_valid(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 doc_validate(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     int valid = validate_doc(self, args);
     if (valid < 0) return NULL;
     if (!valid) {
@@ -911,6 +927,7 @@ doc_importNode(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 doc_adoptNode(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     LibXML_NodeObject *node;
     if (!PyArg_ParseTuple(args, "O!", &LibXML_NodeType, &node)) return NULL;
 
@@ -929,6 +946,7 @@ doc_adoptNode(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 doc_setEncoding(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     PyObject *enc_obj = Py_None;
     if (!PyArg_ParseTuple(args, "|O", &enc_obj)) return NULL;
     if (enc_obj == Py_None || enc_obj == NULL) {
@@ -949,6 +967,7 @@ doc_getEncoding(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 doc_setVersion(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     PyObject *val;
     if (!PyArg_ParseTuple(args, "O", &val)) return NULL;
     if (doc_set_version(self, val, NULL) < 0) return NULL;
@@ -958,6 +977,7 @@ doc_setVersion(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 doc_setStandalone(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     int val;
     if (!PyArg_ParseTuple(args, "i", &val)) return NULL;
     LibXML_DOC(self)->standalone = val;
@@ -967,6 +987,7 @@ doc_setStandalone(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 doc_setBaseURI(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     PyObject *val;
     if (!PyArg_ParseTuple(args, "O", &val)) return NULL;
     if (doc_set_URI(self, val, NULL) < 0) return NULL;
@@ -982,6 +1003,7 @@ doc_getDocumentElement(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 doc_setDocumentElement(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     LibXML_NodeObject *node;
     if (!PyArg_ParseTuple(args, "O!", &LibXML_NodeType, &node)) return NULL;
     if (LibXML_set_root(LibXML_DOC(self), node->node) < 0) return NULL;
@@ -1001,6 +1023,7 @@ doc_compression(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 doc_indexElements(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     long count = xmlXPathOrderDocElems(LibXML_DOC(self));
     return PyLong_FromLong(count);
 }

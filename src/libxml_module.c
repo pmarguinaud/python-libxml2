@@ -12,6 +12,7 @@
 #include "libxml_dtd.h"
 #include "libxml_schema.h"
 #include "libxml_input.h"
+#include "libxml_reader.h"
 
 PyObject *LibXML_Error = NULL;
 
@@ -40,6 +41,7 @@ PyInit__libxml(void)
     if (PyType_Ready(&LibXML_SchemaType) < 0) return NULL;
     if (PyType_Ready(&LibXML_PatternType) < 0) return NULL;
     if (PyType_Ready(&LibXML_RegExpType) < 0) return NULL;
+    if (PyType_Ready(&LibXML_ReaderType) < 0) return NULL;
     if (PyType_Ready(&LibXML_NamespaceType) < 0) return NULL;
     if (PyType_Ready(&LibXML_XPathContextType) < 0) return NULL;
     if (PyType_Ready(&LibXML_XPathExpressionType) < 0) return NULL;
@@ -84,6 +86,7 @@ PyInit__libxml(void)
     ADD_TYPE("Schema",           LibXML_SchemaType)
     ADD_TYPE("Pattern",          LibXML_PatternType)
     ADD_TYPE("RegExp",           LibXML_RegExpType)
+    ADD_TYPE("Reader",           LibXML_ReaderType)
     ADD_TYPE("Namespace",        LibXML_NamespaceType)
     ADD_TYPE("XPathContext",     LibXML_XPathContextType)
     ADD_TYPE("XPathExpression",  LibXML_XPathExpressionType)

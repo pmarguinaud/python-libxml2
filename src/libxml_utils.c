@@ -282,6 +282,50 @@ LibXML_Node_Wrap(xmlNodePtr node)
     return LibXML_Node_Wrap_As(node, NULL);
 }
 
+int
+LibXML_check_unlocked(xmlNodePtr node)
+{
+    xmlDocPtr doc = (node->type == XML_DOCUMENT_NODE || node->type == XML_HTML_DOCUMENT_NODE)
+        ? (xmlDocPtr)node : node->doc;
+    LibXML_NodePrivate *priv = doc ? (LibXML_NodePrivate *)doc->_private : NULL;
+
+    if (priv != NULL && priv->wrapper != NULL
+        && ((LibXML_NodeObject *)priv->wrapper)->readers > 0) {
+        PyErr_SetString(LibXML_Error,
+                        "a Reader is going through this document: it cannot change before the end");
+        return -1;
+    }
+    return 0;
+}
+
+/* The bit of node->extra that keeps xmlTextReader from freeing a node it passed.
+ * A node that Python refers to keeps it, and so do the elements above it. */
+#define READER_PRESERVED 0x2
+
+static void
+mark_preserved(xmlNodePtr node)
+{
+    for (xmlNodePtr n = node; n != NULL; n = n->parent) {
+        switch (n->type) {
+        case XML_ELEMENT_NODE:
+        case XML_TEXT_NODE:
+        case XML_CDATA_SECTION_NODE:
+        case XML_COMMENT_NODE:
+        case XML_PI_NODE:
+        case XML_ENTITY_REF_NODE:
+        case XML_XINCLUDE_START:
+        case XML_XINCLUDE_END:
+            n->extra |= READER_PRESERVED;
+            break;
+        default:
+            /* No `extra` in attributes and declarations; past the document, stop. */
+            if (n->type == XML_DOCUMENT_NODE || n->type == XML_HTML_DOCUMENT_NODE)
+                return;
+            break;
+        }
+    }
+}
+
 PyObject *
 LibXML_Node_Wrap_As(xmlNodePtr node, PyTypeObject *type)
 {
@@ -314,6 +358,9 @@ LibXML_Node_Wrap_As(xmlNodePtr node, PyTypeObject *type)
             if (owner == NULL) { Py_DECREF(doc_obj); return NULL; }
         }
     }
+
+    if (doc_obj != NULL && ((LibXML_NodeObject *)doc_obj)->readers > 0)
+        mark_preserved(node);
 
     if (type == NULL)
         type = wrapper_type(node);

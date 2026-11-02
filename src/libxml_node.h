@@ -14,6 +14,7 @@ typedef struct {
     PyObject   *doc_obj;   /* strong ref to the Document wrapper; NULL if this IS the document */
     PyObject   *owner;     /* strong ref to the root of this tree; NULL if this is a root */
     int         hidden;    /* Document only: holds nodes created without a document */
+    int         readers;   /* Document only: Readers going through it; it cannot change */
 } LibXML_NodeObject;
 
 extern PyTypeObject LibXML_NodeType;

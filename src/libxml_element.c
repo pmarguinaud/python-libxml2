@@ -200,6 +200,7 @@ set_xmlns_attr(xmlNodePtr node, const char *prefix, const char *value)
 static PyObject *
 elem_setAttribute(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     const char *name, *value, *decl_prefix;
     if (!PyArg_ParseTuple(args, "ss", &name, &value)) return NULL;
 
@@ -255,6 +256,7 @@ attr_ns_for(xmlNodePtr node, const char *uri, const xmlChar *prefix)
 static PyObject *
 elem_setAttributeNS(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     const char *ns_uri = NULL, *qname, *value, *decl_prefix;
     if (!PyArg_ParseTuple(args, "zss", &ns_uri, &qname, &value)) return NULL;
     if (ns_uri && ns_uri[0] == '\0') ns_uri = NULL;
@@ -358,6 +360,7 @@ elem_getAttributeNodeNS(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 elem_removeAttribute(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     const char *name;
     if (!PyArg_ParseTuple(args, "s", &name)) return NULL;
     xmlAttrPtr attr = get_attr_node(self->node, name);
@@ -370,6 +373,7 @@ elem_removeAttribute(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 elem_removeAttributeNS(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     const char *ns_uri = NULL, *localname;
     if (!PyArg_ParseTuple(args, "zs", &ns_uri, &localname)) return NULL;
     if (ns_uri && ns_uri[0] == '\0') ns_uri = NULL;
@@ -417,6 +421,7 @@ elem_hasAttributeNS(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 elem_setAttributeNode(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     LibXML_NodeObject *attr_wrap;
     if (!PyArg_ParseTuple(args, "O!", &LibXML_AttrType, &attr_wrap)) return NULL;
 
@@ -582,6 +587,7 @@ elem_getElementsByLocalName(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 elem_appendText(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     const char *text;
     if (!PyArg_ParseTuple(args, "s", &text)) return NULL;
     xmlNodeAddContent(self->node, BAD_CAST text);
@@ -591,12 +597,14 @@ elem_appendText(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 elem_appendTextNode(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     return elem_appendText(self, args);
 }
 
 static PyObject *
 elem_appendTextChild(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     const char *childname, *text = NULL;
     if (!PyArg_ParseTuple(args, "s|z", &childname, &text)) return NULL;
 
@@ -620,6 +628,7 @@ elem_appendTextChild(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 elem_appendWellBalancedChunk(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     const char *chunk;
     if (!PyArg_ParseTuple(args, "s", &chunk)) return NULL;
 
@@ -635,6 +644,7 @@ elem_appendWellBalancedChunk(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 elem_addNewChild(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     const char *ns_uri = NULL, *name;
     if (!PyArg_ParseTuple(args, "zs", &ns_uri, &name)) return NULL;
     if (ns_uri && ns_uri[0] == '\0') ns_uri = NULL;
@@ -672,6 +682,7 @@ elem_addNewChild(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 elem_setNamespace(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     const char *ns_uri = NULL, *prefix = NULL;
     int activate = 1;
     if (!PyArg_ParseTuple(args, "z|zi", &ns_uri, &prefix, &activate)) return NULL;
@@ -681,6 +692,7 @@ elem_setNamespace(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 elem_setNamespaceDeclURI(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     const char *prefix, *uri;
     if (!PyArg_ParseTuple(args, "zz", &prefix, &uri)) return NULL;
     return PyBool_FromLong(set_decl_uri(self->node, prefix, uri));
@@ -689,6 +701,7 @@ elem_setNamespaceDeclURI(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 elem_setNamespaceDeclPrefix(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     const char *old_prefix, *new_prefix;
     if (!PyArg_ParseTuple(args, "zz", &old_prefix, &new_prefix)) return NULL;
     if (old_prefix && old_prefix[0] == '\0') old_prefix = NULL;
@@ -738,6 +751,7 @@ elem_get_tagName(LibXML_NodeObject *self, void *closure)
 static PyObject *
 elem_removeAttributeNode(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     LibXML_NodeObject *attr;
     if (!PyArg_ParseTuple(args, "O!", &LibXML_AttrType, &attr)) return NULL;
     if (attr->node->parent != self->node) {
@@ -753,6 +767,7 @@ elem_removeAttributeNode(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 elem_setAttributeNodeNS(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     /* same as setAttributeNode but namespace-aware */
     return elem_setAttributeNode(self, args);
 }

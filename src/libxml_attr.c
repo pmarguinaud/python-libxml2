@@ -51,6 +51,7 @@ attr_get_value(LibXML_NodeObject *self, void *closure)
 static int
 attr_set_value(LibXML_NodeObject *self, PyObject *value, void *closure)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return -1;
     if (value == NULL) {
         PyErr_SetString(PyExc_TypeError, "cannot delete attribute value");
         return -1;
@@ -91,6 +92,7 @@ attr_isId(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 attr_setValue(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     PyObject *value;
     if (!PyArg_ParseTuple(args, "O", &value)) return NULL;
     if (attr_set_value(self, value, NULL) < 0) return NULL;
@@ -106,6 +108,7 @@ attr_getValue(LibXML_NodeObject *self, PyObject *args)
 static PyObject *
 attr_setNamespace(LibXML_NodeObject *self, PyObject *args)
 {
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
     const char *ns_uri = NULL, *prefix = NULL;
     if (!PyArg_ParseTuple(args, "z|z", &ns_uri, &prefix)) return NULL;
 
