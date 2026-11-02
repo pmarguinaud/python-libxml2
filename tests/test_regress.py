@@ -962,6 +962,112 @@ del p
 gc.collect()
 print(r() is None)""", 'True\nTrue')
 
+# ------------------------------------------------- phase 10: leaks across all classes
+
+case('leak_48_memleak_rt_83744', """
+def f():
+    x = X.XPathContext(); x.registerFunction('match-font', lambda: 1)
+    x.unregisterFunction('match-font')
+print(grows(f, 200000))""", 'False')
+case('leak_80registryleak', """
+xml = '<?xml version="1.0"?>\\n<root><child/></root>\\n'
+def f():
+    doc = P.parse_string(xml); root = doc.documentElement; child = root.firstChild
+print(grows(f))""", 'False')
+case('leak_namespaces', """
+r = P.parse_string('<a xmlns="d" xmlns:p="u" p:x="1"/>').documentElement
+def f():
+    n = X.Namespace('u', 'p'); n.isEqualNode(r.getNamespaces()[0]); n.unique_key()
+    r.namespaces(); r.lookupNamespaceURI('p'); r.lookupNamespacePrefix('u')
+    [a.nodeName for a in r.attributes()]
+print(grows(f, 200000))""", 'False')
+case('leak_namespace_edits', """
+def f():
+    r = P.parse_string('<p:a xmlns:p="u"><p:b/></p:a>').documentElement
+    r.setNamespaceDeclURI('p', 'v'); r.setNamespaceDeclPrefix('p', 'q')
+    r.setNamespace('w', 'z', 0); r.firstChild.setNamespace('w', 'z')
+print(grows(f, 50000))""", 'False')
+case('leak_nodelist', """
+d = P.parse_string('<a>' + '<b>t</b>' * 20 + '</a>')
+def f():
+    l = d.findnodes('//b'); l[2:5]; l[-1]; l.map(lambda n: n); l.grep(lambda n: True)
+    l.sort(lambda a, b: 0); l.to_literal_list(); l.to_literal_delimited(','); l.reverse()
+    l.pop(); l.shift(); l.push(d.documentElement); l.size(); l.string_value()
+print(grows(f, 20000))""", 'False')
+case('leak_xpath_values', """
+d = P.parse_string('<a><b>3</b></a>')
+def f():
+    for e in ('string(//b)', 'number(//b) + 1', '//b = 3', 'count(//b)'):
+        v = d.find(e); v.to_literal(); v.to_number(); v.to_boolean(); str(v)
+    X.Literal('x'); X.Number(1.5); X.Boolean.true(); d.findvalue('//b'); d.findbool('//b')
+print(grows(f, 50000))""", 'False')
+case('leak_html', """
+html = '<!DOCTYPE html><html><head><title>t</title></head><body><p>a<br>b</p></body></html>'
+def f():
+    d = P.load_html(string=html, recover=1); d.toStringHTML(); d.serialize_html()
+    P.parse_html_string('<p>x'); d.documentElement.toString()
+print(grows(f, 50000))""", 'False')
+case('leak_node_kinds', """
+d = P.parse_string('<!DOCTYPE a [<!ENTITY e "v">]><a/>')
+def f():
+    r = d.documentElement
+    for n in (d.createComment('c'), d.createCDATASection('s'), d.createProcessingInstruction('p', 'd'),
+              d.createEntityReference('e'), d.createTextNode('t'), d.createRawElement('q')):
+        r.appendChild(n); r.removeChild(n)
+    frag = d.createDocumentFragment(); frag.appendChild(d.createElement('f')); frag.appendText('x')
+    X.Text('t'); X.Comment('c'); X.CDATASection('s'); X.PI('p', 'd'); X.Element('e')
+    X.DocumentFragment()
+print(grows(f, 50000))""", 'False')
+case('leak_text_edits', """
+d = X.Document()
+def f():
+    t = d.createTextNode('hello world'); e = d.createElement('e'); e.appendChild(t)
+    t.appendData('!'); t.insertData(0, '>'); t.deleteData(0, 1); t.replaceData(0, 1, 'H')
+    t.substringData(0, 4); t.replaceDataString('o', '0', 1); t.deleteDataString('0')
+    t.replaceDataRegEx('w(o)', '$1', 'g'); e.appendChild(d.createTextNode('z')); e.normalize()
+    e.textContent = 'a & b'; e.appendTextChild('c', 'd'); e.appendText('x')
+print(grows(f, 50000))""", 'False')
+case('leak_attribute_edits', """
+d = X.Document()
+def f():
+    e = d.createElement('e'); e.setAttribute('a', '1'); e.setAttributeNS('u', 'p:b', '2')
+    e.getAttributeNode('a'); e.getAttributeNodeNS('u', 'b'); e.getAttributeHash()
+    a = d.createAttribute('c', '3'); e.setAttributeNode(a); e.removeAttributeNode(a)
+    e.removeAttribute('a'); e.removeAttributeNS('u', 'b'); e.attributes()
+    x = X.Attr('z', 'v'); x.value = 'w'; x.toString()
+print(grows(f, 50000))""", 'False')
+case('leak_clone_and_serialize', """
+d = P.parse_string('<a xmlns:p="http://u/"><p:b c="1">t<![CDATA[x]]></p:b><!--c--></a>')
+def f():
+    c = d.cloneNode(1); c.documentElement.cloneNode(1); c.toString(1); c.toBytes()
+    c.documentElement.toString(); c.toStringC14N(); c.documentElement.isEqual(d.documentElement)
+    d.importNode(c.documentElement)
+print(grows(f, 20000))""", 'False')
+case('leak_common', """
+def f():
+    X.encodeToUTF8('iso-8859-1', b'caf\\xe9'); X.decodeFromUTF8('iso-8859-1', 'caf\\xe9')
+    X.encodeToUTF8('UTF-16LE', 'x'.encode('utf-16-le'))
+print(grows(f, 200000))""", 'False')
+case('leak_named_node_map', """
+d = P.parse_string('<a b="1" c="2"/>')
+def f():
+    m = X.NamedNodeMap(d.documentElement.attributes()); m.getNamedItem('b'); m.item(0); m.length()
+    d.documentElement.getAttributeNode('c').toString()
+print(grows(f, 200000))""", 'False')
+case('leak_parser_options', """
+def f():
+    p = X.Parser(no_blanks=1, recover=1, huge=1); p.set_option('expand_entities', 1)
+    p.get_option('recover'); p.set_options(no_network=1, line_numbers=1); p.keep_blanks = 1
+    p.load_xml(string='<a> <b/> </a>', no_blanks=0)
+print(grows(f, 50000))""", 'False')
+case('leak_document_api', """
+def f():
+    d = X.Document('1.0', 'UTF-8'); r = d.createElement('r'); d.setDocumentElement(r)
+    d.createInternalSubset('r', None, 'r.dtd'); d.removeInternalSubset(); d.setEncoding('ISO-8859-1')
+    d.setURI('u'); d.URI; d.actualEncoding; d.insertProcessingInstruction('x', 'y')
+    d.getElementsByTagName('r'); d.getElementById('i'); X.createDocument()
+print(grows(f, 50000))""", 'False')
+
 
 def _param(c):
     name, code, expected, phase, strict = c

@@ -55,7 +55,9 @@ libxml_ext = Extension(
 
 setup(
     name='xml_libxml',
-    version='0.1.0',
+    version='0.2.0',
+    description='libxml2 for Python, following Perl XML::LibXML',
+    python_requires='>=3.6',
     packages=['xml_libxml'],
     ext_modules=[libxml_ext],
 )

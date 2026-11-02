@@ -320,7 +320,9 @@ LibXML_Text_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 {
     const char *content = "";
     static char *kwlist[] = {"content", NULL};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|s", kwlist, &content)) return NULL;
+    /* None gives an empty node, as undef in Perl */
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|z", kwlist, &content)) return NULL;
+    if (content == NULL) content = "";
     return new_standalone(type, make_text, content, NULL);
 }
 
@@ -329,7 +331,9 @@ LibXML_Comment_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 {
     const char *content = "";
     static char *kwlist[] = {"content", NULL};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|s", kwlist, &content)) return NULL;
+    /* None gives an empty node, as undef in Perl */
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|z", kwlist, &content)) return NULL;
+    if (content == NULL) content = "";
     return new_standalone(type, make_comment, content, NULL);
 }
 
@@ -338,7 +342,9 @@ LibXML_CDATASection_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 {
     const char *content = "";
     static char *kwlist[] = {"content", NULL};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|s", kwlist, &content)) return NULL;
+    /* None gives an empty node, as undef in Perl */
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|z", kwlist, &content)) return NULL;
+    if (content == NULL) content = "";
     return new_standalone(type, make_cdata, content, NULL);
 }
 

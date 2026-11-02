@@ -486,10 +486,12 @@ def test_builder_namespaces_of_siblings():
 
 
 def test_builder_undeclared_default_namespace():
-    # The tree is right. Its text is not, as in Perl: the DOM cannot declare xmlns="".
-    doc = SAX.SAX(Handler=SAX.Builder()).parse_string('<r xmlns="u"><a xmlns=""><b/></a><c/></r>')
+    # Perl loses xmlns="", and its text puts a and b in u.
+    xml = '<r xmlns="u"><a xmlns=""><b/></a><c/></r>'
+    doc = SAX.SAX(Handler=SAX.Builder()).parse_string(xml)
     assert [(e.nodeName, e.namespaceURI) for e in doc.findnodes('//*')] == [
         ('r', 'u'), ('a', None), ('b', None), ('c', 'u')]
+    assert doc.documentElement.toString() == xml
 
 
 def test_builder_round_trip():

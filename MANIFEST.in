@@ -1,0 +1,6 @@
+include README.md pyproject.toml
+include src/*.h
+recursive-include docs *.md *.py
+recursive-include tests *.py *.sh *.txt
+recursive-include tests/data *
+recursive-include example *

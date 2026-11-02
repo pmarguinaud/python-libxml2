@@ -1121,6 +1121,7 @@ static PyMethodDef LibXML_Node_methods[] = {
     {"getParentNode",        (PyCFunction)node_getParentNode,         METH_NOARGS,  "Parent node"},
     {"getOwnerDocument",     (PyCFunction)node_getOwnerDocument,      METH_NOARGS,  "Owner document"},
     {"getOwner",             (PyCFunction)node_getOwner,              METH_NOARGS,  "Root of the tree of this node"},
+    {"getOwnerElement",      (PyCFunction)node_getOwner,              METH_NOARGS,  "Root of the tree of this node, as in Perl (Attr: the element)"},
     {"getLocalName",         (PyCFunction)node_getLocalName,          METH_NOARGS,  "Local name"},
     {"getPrefix",            (PyCFunction)node_getPrefix,             METH_NOARGS,  "Namespace prefix"},
     {"getType",              (PyCFunction)node_getType,               METH_NOARGS,  "Node type"},
@@ -1229,8 +1230,21 @@ frag_addNewChild(LibXML_NodeObject *self, PyObject *args)
     return LibXML_Node_Wrap(child);
 }
 
+/* Also in Element: raw text, merged with a last text child */
+static PyObject *
+frag_appendText(LibXML_NodeObject *self, PyObject *args)
+{
+    if (LibXML_check_unlocked(self->node) < 0) return NULL;
+    const char *text;
+    if (!PyArg_ParseTuple(args, "s", &text)) return NULL;
+    xmlNodeAddContent(self->node, BAD_CAST text);
+    Py_RETURN_NONE;
+}
+
 static PyMethodDef frag_methods[] = {
     {"addNewChild", (PyCFunction)frag_addNewChild, METH_VARARGS, "Create a child element in a namespace"},
+    {"appendText",     (PyCFunction)frag_appendText, METH_VARARGS, "Append text"},
+    {"appendTextNode", (PyCFunction)frag_appendText, METH_VARARGS, "Append text"},
     {NULL, NULL}
 };
 

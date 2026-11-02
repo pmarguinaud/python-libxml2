@@ -586,6 +586,9 @@ class Builder:
         for prefix in self._ns.get_declared_prefixes():
             skip_ns = 1
             declared = self._ns.get_uri(prefix)
+            if not prefix and not declared:
+                node.setAttribute('xmlns', '')     # xmlns="": no default namespace
+                continue
             if declared is not None and declared == uri:
                 continue
             node.setNamespace(declared, prefix or None, 0)
@@ -696,6 +699,15 @@ class Generator:
         _call(self.Handler, 'start_document', document)
         _generator_node(self.Handler, node)
         return _call(self.Handler, 'end_document', document)
+
+    # Functions in Perl, called as process_node($handler, $node).
+    @staticmethod
+    def process_node(handler, node):
+        _generator_node(handler, node)
+
+    @staticmethod
+    def process_element(handler, element):
+        _generator_element(handler, element)
 
 
 def _call(handler, event, *args):

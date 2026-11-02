@@ -150,3 +150,10 @@ def _chain(records):
             error._prev_depth = last._prev_depth + 1
         last = error
     return last
+
+
+# The level and domain constants are also Error's, as in Perl (XML::LibXML::Error::XML_ERR_FATAL).
+for _name, _value in list(globals().items()):
+    if _name.startswith('XML_ERR_'):
+        setattr(Error, _name, _value)
+del _name, _value

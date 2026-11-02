@@ -192,6 +192,19 @@ set_xmlns_attr(xmlNodePtr node, const char *prefix, const char *value)
         activate = strcmp((const char *)node->ns->prefix, prefix) == 0;
     }
 
+    /* xmlns="" on an element out of the default namespace in scope: declared as a
+     * parse does, with an empty URI. Perl ignores it, and the text would put the
+     * element in the namespace of its parent. */
+    if (prefix == NULL && value[0] == '\0'
+        && (node->ns == NULL || node->ns->prefix != NULL)) {
+        xmlNsPtr own = NULL;
+        for (xmlNsPtr ns = node->nsDef; ns; ns = ns->next)
+            if (ns->prefix == NULL) own = ns;
+        xmlNsPtr scope = own ? NULL : xmlSearchNs(node->doc, node, NULL);
+        if (scope && scope->href && scope->href[0] != '\0')
+            return PyBool_FromLong(xmlNewNs(node, BAD_CAST "", NULL) != NULL);
+    }
+
     int done = set_decl_uri(node, prefix, value)
             || set_namespace(node, value, prefix, activate);
     return PyBool_FromLong(done);

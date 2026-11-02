@@ -165,6 +165,9 @@ def op_content():
         lambda: setattr(a, 'value', 'v2'),
         lambda: a.setCargo([1, 2]),
         lambda: a.getCargo(),
+        lambda: remember(a.getOwnerElement()),
+        lambda: a.appendTextNode('t'),
+        lambda: remember(rng.choice([X.Text, X.Comment, X.CDATASection])(None)),
     ])()
 
 
@@ -254,6 +257,7 @@ def op_attributes():
         lambda: list(hash_view.items()),
         lambda: a.nonBlankChildNodes(),
         lambda: remember(a.firstNonBlankChild()),
+        lambda: hash_view.all_keys(),
     ])()
 
 

@@ -869,3 +869,44 @@ def test_children_of_document_are_elements_only_once():
     assert doc.namespaceURI is None
     assert doc.localname is None
     assert doc.nodeValue is None
+
+
+# ------------------------------------------------------------- xmlns="" (Phase 10)
+
+def test_set_attribute_xmlns_empty_undeclares_the_default():
+    # Perl ignores it: its text then puts a in u.
+    doc = Document()
+    root = doc.createElementNS('u', 'r')
+    doc.setDocumentElement(root)
+    a = doc.createElement('a')
+    root.appendChild(a)
+    assert root.toString() == '<r xmlns="u"><a/></r>'
+    assert a.setAttribute('xmlns', '')
+    assert root.toString() == '<r xmlns="u"><a xmlns=""/></r>'
+    assert a.namespaceURI is None
+    a.appendChild(doc.createElement('b'))
+    reparsed = Parser().parse_string(root.toString()).documentElement
+    assert [(e.nodeName, e.namespaceURI) for e in reparsed.findnodes('//*')] == [
+        ('r', 'u'), ('a', None), ('b', None)]
+
+
+def test_set_attribute_xmlns_empty_is_ignored_where_it_means_nothing():
+    doc = Document()
+    root = doc.createElementNS('u', 'r')
+    doc.setDocumentElement(root)
+    in_u = doc.createElementNS('u', 'x')
+    root.appendChild(in_u)
+    assert not in_u.setAttribute('xmlns', '')       # x is in the default namespace
+    alone = Element('a')
+    assert not alone.setAttribute('xmlns', '')      # no default namespace in scope
+    assert root.toString() == '<r xmlns="u"><x/></r>'
+    assert alone.toString() == '<a/>'
+
+
+def test_xmlns_empty_moves_with_its_element():
+    doc = Parser().parse_string('<r xmlns="u"><a xmlns=""><b/></a></r>')
+    a = doc.documentElement.firstChild
+    other = Parser().parse_string('<s xmlns="v"/>')
+    other.documentElement.appendChild(other.adoptNode(a))
+    assert other.documentElement.toString() == '<s xmlns="v"><a xmlns=""><b/></a></s>'
+    assert [e.namespaceURI for e in other.findnodes('//*')] == ['v', None, None]

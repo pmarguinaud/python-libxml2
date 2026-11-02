@@ -121,6 +121,10 @@ class AttributeHash(collections.abc.MutableMapping):
     def __len__(self):
         return sum(1 for _ in self)
 
+    def all_keys(self):
+        """The keys, sorted, as in Perl."""
+        return list(self)
+
 
 def replace_data_regex(node, left, right='', flags=None):
     """replaceDataRegEx: a Python regular expression, with $1 or \\1 in right."""
