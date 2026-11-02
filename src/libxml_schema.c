@@ -2,10 +2,10 @@
 #include "libxml_utils.h"
 #include "libxml_node.h"
 #include "libxml_document.h"
+#include "libxml_input.h"
 #include <libxml/relaxng.h>
 #include <libxml/xmlschemas.h>
 #include <libxml/xmlregexp.h>
-#include <libxml/xmlIO.h>
 
 /* ------------------------------------------------------------------ */
 /* Where a schema comes from                                           */
@@ -94,33 +94,14 @@ source_init(Source *src, PyObject *args, PyObject *kwds)
     return 0;
 }
 
-/* These calls are deprecated in recent libxml2, without a replacement that also
- * exists in older ones. */
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-
-static xmlExternalEntityLoader
-network_off(const Source *src)
-{
-    xmlExternalEntityLoader old = xmlGetExternalEntityLoader();
-    if (src->no_network)
-        xmlSetExternalEntityLoader(xmlNoNetExternalEntityLoader);
-    return old;
-}
-
-static void
-network_back(const Source *src, xmlExternalEntityLoader old)
-{
-    if (src->no_network)
-        xmlSetExternalEntityLoader(old);
-}
-
-#pragma GCC diagnostic pop
-
 /* After loading a schema: 0 if it can be kept, -1 with an exception. */
 static int
 loaded(const void *schema, const Source *src)
 {
+    if (PyErr_Occurred()) {
+        LibXML_errors_begin();
+        return -1;
+    }
     if (schema == NULL) {
         LibXML_raise_last_error();
         return -1;
@@ -170,9 +151,10 @@ relaxng_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
         return NULL;
     }
 
-    xmlExternalEntityLoader old = network_off(&src);
+    LibXML_ParseState state;
+    LibXML_state_push(&state, NULL, NULL, src.no_network);
     xmlRelaxNGPtr schema = xmlRelaxNGParse(ctxt);
-    network_back(&src, old);
+    LibXML_state_pop(&state);
     xmlRelaxNGFreeParserCtxt(ctxt);
 
     int rc = loaded(schema, &src);
@@ -270,9 +252,10 @@ schema_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
         return NULL;
     }
 
-    xmlExternalEntityLoader old = network_off(&src);
+    LibXML_ParseState state;
+    LibXML_state_push(&state, NULL, NULL, src.no_network);
     xmlSchemaPtr schema = xmlSchemaParse(ctxt);
-    network_back(&src, old);
+    LibXML_state_pop(&state);
     xmlSchemaFreeParserCtxt(ctxt);
 
     int rc = loaded(schema, &src);

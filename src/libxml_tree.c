@@ -629,6 +629,19 @@ drop_xinclude_markers(xmlNodePtr top)
     return 0;
 }
 
+static void
+forget_end_ns(xmlNodePtr node, void *arg)
+{
+    if (node->type == XML_XINCLUDE_END)
+        node->ns = NULL;
+}
+
+void
+LibXML_xinclude_finish(xmlDocPtr doc)
+{
+    LibXML_walk_tree((xmlNodePtr)doc, forget_end_ns, NULL);
+}
+
 int
 LibXML_xinclude_prepare(xmlDocPtr doc)
 {

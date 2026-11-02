@@ -59,6 +59,9 @@ from xml_libxml._libxml import (
 )
 
 from xml_libxml import Common, ErrNo
+from xml_libxml._callbacks import (InputCallback, callbacks, close_callback,
+                                   match_callback, open_callback, read_callback)
+from xml_libxml._libxml import externalEntityLoader
 from xml_libxml._dom import AttributeHash, NamedNodeMap
 from xml_libxml.Common import decodeFromUTF8, encodeToUTF8
 
@@ -83,6 +86,8 @@ __all__ = [
     'CDATASection', 'PI', 'Attr', 'Namespace', 'Dtd', 'RelaxNG', 'Schema', 'Pattern', 'RegExp', 'NodeList', 'XPathContext', 'XPathExpression',
     'Literal', 'Number', 'Boolean', 'DocumentFragment',
     'Error', 'ErrNo', 'Common', 'load_xml', 'load_html', 'createDocument', 'load_catalog',
+    'InputCallback', 'externalEntityLoader', 'callbacks', 'match_callback',
+    'open_callback', 'read_callback', 'close_callback',
     'AttributeHash', 'NamedNodeMap', 'encodeToUTF8', 'decodeFromUTF8',
     'XML_ELEMENT_NODE', 'XML_ATTRIBUTE_NODE', 'XML_TEXT_NODE',
     'XML_CDATA_SECTION_NODE', 'XML_ENTITY_REF_NODE', 'XML_ENTITY_NODE',

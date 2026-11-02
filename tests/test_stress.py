@@ -279,9 +279,67 @@ def op_schema():
     ])()
 
 
+def meddle_and_give(text):
+    # What a callback can do: change trees, parse, raise.
+    rng.choice([
+        lambda: op_move(),
+        lambda: op_forget(),
+        lambda: remember(PARSER.parse_string(rng.choice(SOURCES)).documentElement),
+        lambda: PUSHER.push('<p>'),
+        lambda: PUSHER.finish_push(rng.randint(0, 1)),
+        lambda: None,
+    ])()
+    if rng.random() < 0.1:
+        raise ValueError('callback')
+    return text
+
+
+INCLUDE = ('<w xmlns:xi="http://www.w3.org/2001/XInclude"><xi:include href="/cb/one.xml"/>'
+           '<xi:include href="/cb/two.xml" parse="text"/></w>')
+ENTITY_DOC = '<!DOCTYPE e [<!ENTITY x SYSTEM "urn:x">]><e>&x;</e>'
+PUSHER = X.Parser()
+
+
+def callback_parser():
+    parser = X.Parser(expand_xinclude=1, expand_entities=rng.randint(0, 1),
+                      ext_ent_handler=lambda url, ident: meddle_and_give('<i/>'))
+    parser.callbacks(lambda uri: uri.startswith('/cb/'),
+                     lambda uri: {'left': rng.randint(0, 3)},
+                     lambda handle, length: meddle_and_give(
+                         '' if handle['left'] <= 0 else
+                         (handle.__setitem__('left', handle['left'] - 1) or '<k>t</k>'
+                          if handle['left'] == 1 else ' ')),
+                     lambda handle: meddle_and_give(None))
+    return parser
+
+
+def op_callbacks():
+    parser = callback_parser()
+    doc = parser.parse_string(rng.choice([INCLUDE, ENTITY_DOC]))
+    docs.append(doc)
+    del docs[:-6]
+    remember(doc.documentElement)
+
+
+def op_push():
+    pusher = rng.choice([PUSHER, callback_parser()])
+    text = rng.choice(SOURCES + [INCLUDE, ENTITY_DOC])
+    cut = rng.randint(0, len(text))
+    rng.choice([
+        lambda: pusher.push(text[:cut], text[cut:]),
+        lambda: pusher.push(text[:cut]),
+        lambda: pusher.parse_chunk(text[cut:], rng.randint(0, 1)),
+        lambda: pusher.init_push(),
+    ])()
+    if rng.random() < 0.5:
+        doc = pusher.finish_push(rng.randint(0, 1))
+        if doc is not None:
+            remember(doc.documentElement)
+
+
 OPS = [op_grab, op_create, op_fragment, op_move, op_move, op_move,
        op_documents, op_content, op_content, op_forget, op_xpath_callback,
-       op_dtd, op_dtd, op_attributes, op_xinclude, op_schema]
+       op_dtd, op_dtd, op_attributes, op_xinclude, op_schema, op_callbacks, op_push]
 
 for doc in docs:
     remember(doc.documentElement)
@@ -290,7 +348,7 @@ for step in range(steps):
         rng.choice(OPS)()
         if pool:
             scan(pick())
-    except (X.Error, TypeError, AttributeError, IndexError, KeyError):
+    except (X.Error, TypeError, AttributeError, IndexError, KeyError, ValueError):
         pass
 
 for node in pool:

@@ -7,7 +7,10 @@ typedef struct {
     PyObject_HEAD
     int flags;          /* XML_PARSE_* options */
     int recover;        /* 0: errors raise, 1: warn, 2: silent */
-    PyObject *extra;    /* line_numbers, base_uri, gdome, ext_ent_handler */
+    PyObject *extra;    /* line_numbers, base_uri, gdome, ext_ent_handler, callbacks */
+    xmlParserCtxtPtr push_ctxt;     /* the push parse in progress, or NULL */
+    int push_busy;                  /* libxml2 is working on it, and a callback runs */
+    xmlChar *push_declared;         /* its declared encoding, if it was given as str */
 } LibXML_ParserObject;
 
 extern PyTypeObject LibXML_ParserType;

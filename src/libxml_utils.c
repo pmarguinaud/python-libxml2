@@ -54,6 +54,25 @@ LibXML_errors_begin(void)
         PyList_SetSlice(list, 0, PyList_GET_SIZE(list), NULL);
 }
 
+PyObject *
+LibXML_errors_hold(void)
+{
+    PyObject *list = thread_errors();
+    if (list == NULL) return NULL;
+    PyObject *held = PyList_GetSlice(list, 0, PyList_GET_SIZE(list));
+    PyList_SetSlice(list, 0, PyList_GET_SIZE(list), NULL);
+    return held;
+}
+
+void
+LibXML_errors_resume(PyObject *held)
+{
+    PyObject *list = thread_errors();
+    if (list != NULL && held != NULL)
+        PyList_SetSlice(list, 0, PyList_GET_SIZE(list), held);
+    Py_XDECREF(held);
+}
+
 static void
 record_string(PyObject *record, const char *key, const char *value)
 {

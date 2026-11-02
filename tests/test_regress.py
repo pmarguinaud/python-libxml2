@@ -703,6 +703,81 @@ def f():
     d.process_xinclude()
 print(grows(f, 40000))""" % XI_DOC, 'False')
 
+case('leak_push', """
+p = X.Parser()
+def good():
+    p.push('<a>', '<b x="1">t</b>', '</a>')
+    p.finish_push()
+def bad():
+    try: p.push('<a>', '</b>')
+    except X.Error: pass
+    try: p.finish_push()
+    except X.Error: pass
+def restore():
+    try: p.push('<a><b>')
+    except X.Error: pass
+    p.finish_push(1)
+def dropped():
+    q = X.Parser()
+    q.push('<a><b>')
+print(grows(good, 40000), grows(bad, 40000), grows(restore, 20000), grows(dropped, 40000))""",
+     'False False False False')
+
+case('leak_input_callbacks', """
+text = '<x xmlns:xi="http://www.w3.org/2001/XInclude"><xi:include href="/cb/a.xml"/></x>'
+p = X.Parser(expand_xinclude=1)
+def read(h, n):
+    if h['done']: return ''
+    h['done'] = True
+    return '<a>' + 'x' * 5000 + '</a>'
+p.callbacks(lambda u: u.startswith('/cb/'), lambda u: {'done': False}, read, lambda h: None)
+print(grows(lambda: p.parse_string(text), 20000))
+def boom(h, n): raise ValueError('x')
+q = X.Parser(expand_xinclude=1)
+q.callbacks(lambda u: u.startswith('/cb/'), lambda u: {'done': False}, boom, lambda h: None)
+def f():
+    try: q.parse_string(text)
+    except ValueError: pass
+print(grows(f, 20000))""", 'False\nFalse')
+
+case('leak_entity_loaders', """
+text = '<!DOCTYPE e [<!ENTITY x SYSTEM "urn:x">]><e>&x;</e>'
+p = X.Parser(expand_entities=1, ext_ent_handler=lambda u, i: 'v' * 1000)
+print(grows(lambda: p.parse_string(text), 40000))
+X.externalEntityLoader(lambda u, i: 'w' * 1000)
+print(grows(lambda: X.Parser(expand_entities=1).parse_string(text), 40000))
+print(grows(lambda: X.externalEntityLoader(lambda u, i: 'z'), 100000))
+X.externalEntityLoader(None)""", 'False\nFalse\nFalse')
+
+case('callback_closes_in_parser_dealloc', """
+closed = []
+p = X.Parser(load_ext_dtd=1)
+def close(fh):
+    fh.close()
+    closed.append(1)
+    raise ValueError('ignored')
+p.callbacks(lambda u: u.endswith('.dtd'), lambda u: open(u), lambda fh, n: fh.read(n), close)
+try:
+    p.push('<!DOCTYPE a SYSTEM "example/test.dtd"><a>')
+except ValueError as error:
+    print(error)
+del p
+import gc; gc.collect()
+print(len(closed))""", 'ignored\n1')
+
+case('xinclude_end_marker_after_start_is_freed', """
+d = P.parse_string('<a xmlns:xi="http://www.w3.org/2001/XInclude"><xi:include href="no.xml"><xi:fallback><b/></xi:fallback></xi:include></a>')
+fallback = d.documentElement.firstChild.firstChild
+d.process_xinclude()
+start = d.documentElement.firstChild
+end = d.documentElement.lastChild
+print(start.nodeType, end.nodeType)
+d.documentElement.removeChild(start)
+del start
+import gc; gc.collect()
+d.documentElement.removeChild(end)
+print(d.toString().count('<b/>'))""", '19 20\n1')
+
 case('dtd_keeps_entities_of_moved_refs', """
 P2 = X.Parser(expand_entities=0)
 d = P2.parse_string('<!DOCTYPE a [<!ENTITY e "v">]><a>&e;</a>')

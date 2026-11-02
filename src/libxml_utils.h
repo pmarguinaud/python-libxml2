@@ -47,6 +47,11 @@ void LibXML_errors_begin(void);
 /* End it. With errors: recover 0 raises and returns -1, 1 warns, 2 ignores them. */
 int LibXML_report_errors(int recover);
 
+/* Keep the errors of this operation aside while Python code runs in a callback, as
+ * it can start operations of its own. Hold returns what to give to resume. */
+PyObject *LibXML_errors_hold(void);
+void LibXML_errors_resume(PyObject *held);
+
 /* Raise what was reported, or a generic error if nothing was. */
 void LibXML_raise_last_error(void);
 

@@ -80,6 +80,10 @@ int LibXML_set_ext_subset(xmlDocPtr doc, xmlNodePtr dtd);
  * Returns 0, or -1 with an exception. */
 int LibXML_xinclude_prepare(xmlDocPtr doc);
 
+/* After it: the end markers XInclude adds share the namespace of the start ones,
+ * which may be declared on the start marker. They hold nothing, so they lose it. */
+void LibXML_xinclude_finish(xmlDocPtr doc);
+
 /* Make node the root element of doc. The previous root is released. */
 int LibXML_set_root(xmlDocPtr doc, xmlNodePtr node);
 

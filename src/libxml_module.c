@@ -11,6 +11,7 @@
 #include "libxml_namespace.h"
 #include "libxml_dtd.h"
 #include "libxml_schema.h"
+#include "libxml_input.h"
 
 PyObject *LibXML_Error = NULL;
 
@@ -91,6 +92,7 @@ PyInit__libxml(void)
 #undef ADD_TYPE
 
     if (LibXML_xpath_init(m) < 0) { Py_DECREF(m); return NULL; }
+    if (LibXML_input_init(m) < 0) { Py_DECREF(m); return NULL; }
 
     /* Node type constants */
 #define ADD_INT(name, val) \

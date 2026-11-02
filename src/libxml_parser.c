@@ -3,6 +3,7 @@
 #include "libxml_document.h"
 #include "libxml_node.h"
 #include "libxml_tree.h"
+#include "libxml_input.h"
 #include <libxml/parserInternals.h>
 #include <libxml/xinclude.h>
 #include <libxml/catalog.h>
@@ -65,7 +66,6 @@ typedef struct {
     int flags;
     int recover;
     PyObject *extra;    /* owned */
-    PyObject *held;     /* entity contents that must outlive the parse */
 } ParseConfig;
 
 static int
@@ -161,7 +161,6 @@ config_init(ParseConfig *cfg, LibXML_ParserObject *self, PyObject *kwds)
 {
     cfg->flags = self->flags;
     cfg->recover = self->recover;
-    cfg->held = NULL;
     cfg->extra = PyDict_Copy(self->extra);
     if (cfg->extra == NULL) return -1;
     if (apply_options(&cfg->flags, &cfg->recover, cfg->extra, kwds) < 0) {
@@ -175,7 +174,6 @@ static void
 config_clear(ParseConfig *cfg)
 {
     Py_CLEAR(cfg->extra);
-    Py_CLEAR(cfg->held);
 }
 
 /* The flags given to libxml2. As in Perl, without load_ext_dtd all that needs
@@ -193,72 +191,20 @@ xml_options(const ParseConfig *cfg)
 /* External entities                                                   */
 /* ------------------------------------------------------------------ */
 
-static xmlExternalEntityLoader saved_loader = NULL;
-static const ParseConfig *active_cfg = NULL;    /* for contexts made by libxml2 */
+/* What a parse with these options gives to the loader and the input callbacks */
+static void
+state_begin(LibXML_ParseState *state, PyObject *extra)
+{
+    PyObject *handler = PyDict_GetItemString(extra, "ext_ent_handler");
+    if (handler == Py_None)
+        handler = NULL;
+    LibXML_state_push(state, LibXML_collect_callbacks(extra), handler, 0);
+}
 
 /* These calls are deprecated in recent libxml2, without a replacement that
  * also exists in older ones. */
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-
-static xmlParserInputPtr
-entity_loader(const char *url, const char *id, xmlParserCtxtPtr ctxt)
-{
-    ParseConfig *cfg = ctxt ? (ParseConfig *)ctxt->_private : NULL;
-    if (cfg == NULL) cfg = (ParseConfig *)active_cfg;
-    PyObject *handler = cfg ? PyDict_GetItemString(cfg->extra, "ext_ent_handler") : NULL;
-
-    if (handler == NULL || handler == Py_None || PyErr_Occurred())
-        return saved_loader ? saved_loader(url, id, ctxt) : NULL;
-
-    PyObject *result = PyObject_CallFunction(handler, "ss", url ? url : "", id ? id : "");
-    if (result == NULL) return NULL;
-
-    PyObject *bytes;
-    if (PyUnicode_Check(result)) {
-        bytes = PyUnicode_AsUTF8String(result);
-        Py_DECREF(result);
-    } else if (PyBytes_Check(result)) {
-        bytes = result;
-    } else {
-        Py_DECREF(result);
-        PyErr_SetString(PyExc_TypeError, "ext_ent_handler must return str or bytes");
-        return NULL;
-    }
-    if (bytes == NULL) return NULL;
-
-    /* An older libxml2 does not copy the string. */
-    if (cfg->held == NULL) cfg->held = PyList_New(0);
-    if (cfg->held == NULL || PyList_Append(cfg->held, bytes) < 0) {
-        Py_DECREF(bytes);
-        return NULL;
-    }
-    Py_DECREF(bytes);
-
-    return xmlNewStringInputStream(ctxt, BAD_CAST PyBytes_AS_STRING(bytes));
-}
-
-static void
-loader_begin(const ParseConfig *cfg)
-{
-    PyObject *handler = PyDict_GetItemString(cfg->extra, "ext_ent_handler");
-    if (handler != NULL && handler != Py_None) {
-        saved_loader = xmlGetExternalEntityLoader();
-        xmlSetExternalEntityLoader(entity_loader);
-        active_cfg = cfg;
-    }
-}
-
-static void
-loader_end(const ParseConfig *cfg)
-{
-    PyObject *handler = PyDict_GetItemString(cfg->extra, "ext_ent_handler");
-    if (handler != NULL && handler != Py_None) {
-        xmlSetExternalEntityLoader(saved_loader);
-        saved_loader = NULL;
-        active_cfg = NULL;
-    }
-}
 
 /* Blanks in a chunk: the chunk API has no option for it. */
 PyObject *
@@ -466,9 +412,11 @@ run_xinclude(ParseConfig *cfg, xmlDocPtr doc)
         return -1;
 
     LibXML_errors_begin();
-    loader_begin(cfg);
+    LibXML_ParseState state;
+    state_begin(&state, cfg->extra);
     int rc = xmlXIncludeProcessFlags(doc, xml_options(cfg));
-    loader_end(cfg);
+    LibXML_state_pop(&state);
+    LibXML_xinclude_finish(doc);
 
     if (PyErr_Occurred()) {
         PyObject *type, *value, *tb;
@@ -579,14 +527,15 @@ parse_xml(ParseConfig *cfg, const Input *in, const char *filename,
     }
     ctxt->_private = cfg;
 
-    loader_begin(cfg);
+    LibXML_ParseState state;
+    state_begin(&state, cfg->extra);
     xmlDocPtr doc;
     if (filename != NULL)
         doc = xmlCtxtReadFile(ctxt, filename, encoding, xml_options(cfg));
     else
         doc = xmlCtxtReadMemory(ctxt, in->data, (int)in->size, url, encoding,
                                 xml_options(cfg));
-    loader_end(cfg);
+    LibXML_state_pop(&state);
 
     int well_formed = ctxt->wellFormed;
     int valid = ctxt->valid;
@@ -929,11 +878,14 @@ parse_html(LibXML_ParserObject *self, const Input *in, const char *filename,
     htmlParserCtxtPtr ctxt = htmlNewParserCtxt();
     if (ctxt == NULL) return PyErr_NoMemory();
 
+    LibXML_ParseState state;
+    state_begin(&state, self->extra);
     htmlDocPtr doc;
     if (filename != NULL)
         doc = htmlCtxtReadFile(ctxt, filename, encoding, flags);
     else
         doc = htmlCtxtReadMemory(ctxt, in->data, (int)in->size, url, encoding, flags);
+    LibXML_state_pop(&state);
     htmlFreeParserCtxt(ctxt);
 
     if (doc != NULL && (filename == NULL || url != NULL))
@@ -1036,6 +988,319 @@ parser_parse_balanced_chunk(LibXML_ParserObject *self, PyObject *args)
 /* ------------------------------------------------------------------ */
 /* Options as attributes and through get_option                        */
 /* ------------------------------------------------------------------ */
+
+/* ------------------------------------------------------------------ */
+/* Input callbacks of a parser                                         */
+/* ------------------------------------------------------------------ */
+
+/* Get it, or set it. As in Perl, setting one drops the InputCallback. */
+static PyObject *
+callback_access(LibXML_ParserObject *self, PyObject *args, const char *key)
+{
+    PyObject *value = NULL;
+    if (!PyArg_ParseTuple(args, "|O", &value)) return NULL;
+
+    if (value != NULL) {
+        if (PyDict_SetItemString(self->extra, key, value) < 0) return NULL;
+        if (PyDict_GetItemString(self->extra, "input_callbacks") != NULL
+            && PyDict_DelItemString(self->extra, "input_callbacks") < 0)
+            return NULL;
+        Py_INCREF(value);
+        return value;
+    }
+    value = PyDict_GetItemString(self->extra, key);
+    if (value == NULL) Py_RETURN_NONE;
+    Py_INCREF(value);
+    return value;
+}
+
+#define CALLBACK_METHOD(name) \
+static PyObject * \
+parser_##name(LibXML_ParserObject *self, PyObject *args) \
+{ \
+    return callback_access(self, args, #name); \
+}
+
+CALLBACK_METHOD(match_callback)
+CALLBACK_METHOD(open_callback)
+CALLBACK_METHOD(read_callback)
+CALLBACK_METHOD(close_callback)
+
+/* callbacks() gives the four, callbacks(match, open, read, close) sets them. */
+static PyObject *
+parser_callbacks(LibXML_ParserObject *self, PyObject *args)
+{
+    static const char *const keys[] = {
+        "match_callback", "open_callback", "read_callback", "close_callback"
+    };
+    Py_ssize_t count = PyTuple_GET_SIZE(args);
+
+    if (count != 0 && count != 4) {
+        PyErr_SetString(PyExc_TypeError, "expected four callbacks: match, open, read, close");
+        return NULL;
+    }
+    if (count == 4) {
+        for (int i = 0; i < 4; i++) {
+            if (PyDict_SetItemString(self->extra, keys[i], PyTuple_GET_ITEM(args, i)) < 0)
+                return NULL;
+        }
+        if (PyDict_GetItemString(self->extra, "input_callbacks") != NULL
+            && PyDict_DelItemString(self->extra, "input_callbacks") < 0)
+            return NULL;
+        Py_RETURN_NONE;
+    }
+
+    PyObject *result = PyTuple_New(4);
+    if (result == NULL) return NULL;
+    for (int i = 0; i < 4; i++) {
+        PyObject *value = PyDict_GetItemString(self->extra, keys[i]);
+        if (value == NULL) value = Py_None;
+        Py_INCREF(value);
+        PyTuple_SET_ITEM(result, i, value);
+    }
+    return result;
+}
+
+static PyObject *
+parser_input_callbacks(LibXML_ParserObject *self, PyObject *args)
+{
+    PyObject *value = NULL;
+    if (!PyArg_ParseTuple(args, "|O", &value)) return NULL;
+
+    if (value != NULL) {
+        if (value != Py_None && !PyObject_HasAttrString(value, "_callbacks")) {
+            PyErr_SetString(PyExc_TypeError, "expected an InputCallback");
+            return NULL;
+        }
+        if (PyDict_SetItemString(self->extra, "input_callbacks", value) < 0)
+            return NULL;
+    }
+    value = PyDict_GetItemString(self->extra, "input_callbacks");
+    if (value == NULL) Py_RETURN_NONE;
+    Py_INCREF(value);
+    return value;
+}
+
+/* ------------------------------------------------------------------ */
+/* Push parser                                                         */
+/* ------------------------------------------------------------------ */
+
+static void
+push_free(LibXML_ParserObject *self)
+{
+    xmlParserCtxtPtr ctxt = self->push_ctxt;
+
+    self->push_ctxt = NULL;
+    xmlFree(self->push_declared);
+    self->push_declared = NULL;
+    if (ctxt != NULL) {
+        xmlDocPtr doc = ctxt->myDoc;
+        ctxt->myDoc = NULL;
+        xmlFreeParserCtxt(ctxt);
+        if (doc != NULL) xmlFreeDoc(doc);
+    }
+}
+
+/* A callback must not touch the context that libxml2 is working on. */
+static int
+push_refused(LibXML_ParserObject *self)
+{
+    if (self->push_busy) {
+        PyErr_SetString(LibXML_Error, "this parser is in the middle of a push");
+        return 1;
+    }
+    return 0;
+}
+
+/* Run xmlParseChunk with the callbacks of the parser. */
+static void
+push_feed(LibXML_ParserObject *self, const char *data, int size, int terminate)
+{
+    LibXML_ParseState state;
+
+    self->push_busy = 1;
+    state_begin(&state, self->extra);
+    xmlParseChunk(self->push_ctxt, data, size, terminate);
+    LibXML_state_pop(&state);
+    self->push_busy = 0;
+}
+
+static int
+push_start(LibXML_ParserObject *self)
+{
+    ParseConfig cfg;
+    if (config_init(&cfg, self, NULL) < 0) return -1;
+
+    push_free(self);
+
+    PyObject *uri_hold = NULL;
+    const char *url = config_uri(&cfg, &uri_hold);
+    self->push_ctxt = xmlCreatePushParserCtxt(NULL, NULL, NULL, 0, url);
+    Py_XDECREF(uri_hold);
+    if (self->push_ctxt == NULL) {
+        config_clear(&cfg);
+        PyErr_NoMemory();
+        return -1;
+    }
+    xmlCtxtUseOptions(self->push_ctxt, xml_options(&cfg));
+    config_clear(&cfg);
+    return 0;
+}
+
+static PyObject *
+parser_init_push(LibXML_ParserObject *self, PyObject *args)
+{
+    if (push_refused(self) || push_start(self) < 0) return NULL;
+    Py_RETURN_NONE;
+}
+
+/* A str is text already: its declaration says nothing about these bytes. */
+static int
+push_first_text(LibXML_ParserObject *self, const Input *in)
+{
+    xmlParserCtxtPtr ctxt = self->push_ctxt;
+
+    if (!in->is_text || ctxt->input == NULL || ctxt->input->end != ctxt->input->base
+        || self->push_declared != NULL)
+        return 0;
+    self->push_declared = declared_encoding(in->data, in->size);
+    if (self->push_declared == NULL)
+        return 0;
+
+    int options = ctxt->options;
+    if (xmlCtxtResetPush(ctxt, NULL, 0, NULL, "UTF-8") != 0) {
+        PyErr_SetString(LibXML_Error, "cannot restart the push parser");
+        return -1;
+    }
+    xmlCtxtUseOptions(ctxt, options);
+    return 0;
+}
+
+/* Returns 0, or -1 with an exception. */
+static int
+push_one(LibXML_ParserObject *self, PyObject *chunk)
+{
+    if (chunk == Py_None) return 0;
+
+    /* Empty chunks are skipped, as in Perl. */
+    Py_ssize_t length = PyObject_Length(chunk);
+    if (length == 0) return 0;
+    if (length < 0) PyErr_Clear();
+
+    Input in;
+    if (input_init(&in, chunk) < 0) return -1;
+    if (in.size > INT_MAX) {
+        input_clear(&in);
+        PyErr_SetString(LibXML_Error, "this chunk is too big");
+        return -1;
+    }
+    if (self->push_ctxt == NULL && push_start(self) < 0) {
+        input_clear(&in);
+        return -1;
+    }
+    if (push_first_text(self, &in) < 0) {
+        input_clear(&in);
+        return -1;
+    }
+
+    int recover = self->recover;
+    LibXML_errors_begin();
+    push_feed(self, in.data, (int)in.size, 0);
+    input_clear(&in);
+
+    if (PyErr_Occurred()) {
+        PyObject *type, *value, *tb;
+        PyErr_Fetch(&type, &value, &tb);
+        LibXML_errors_begin();
+        PyErr_Restore(type, value, tb);
+        return -1;
+    }
+    if (LibXML_report_errors(quiet_recover(recover, self->flags)) < 0)
+        return -1;
+    if (self->push_ctxt == NULL || !self->push_ctxt->wellFormed) {
+        PyErr_SetString(LibXML_Error, "XML not well-formed in xmlParseChunk");
+        return -1;
+    }
+    return 0;
+}
+
+static PyObject *
+parser_push(LibXML_ParserObject *self, PyObject *args)
+{
+    if (push_refused(self)) return NULL;
+
+    for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(args); i++) {
+        if (push_one(self, PyTuple_GET_ITEM(args, i)) < 0) return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
+static PyObject *
+parser_finish(LibXML_ParserObject *self, int restore)
+{
+    if (self->push_ctxt == NULL) Py_RETURN_NONE;
+
+    ParseConfig cfg;
+    if (config_init(&cfg, self, NULL) < 0) return NULL;
+
+    LibXML_errors_begin();
+    push_feed(self, "", 0, 1);
+
+    xmlParserCtxtPtr ctxt = self->push_ctxt;
+    int well_formed = ctxt->wellFormed;
+    xmlDocPtr doc = ctxt->myDoc;
+    xmlChar *declared = self->push_declared;
+    ctxt->myDoc = NULL;
+    self->push_declared = NULL;
+    push_free(self);
+
+    if (doc != NULL) {
+        PyObject *uri_hold = NULL;
+        set_doc_uri(doc, config_uri(&cfg, &uri_hold));
+        Py_XDECREF(uri_hold);
+        if (declared != NULL) {
+            xmlFree((xmlChar *)doc->encoding);
+            doc->encoding = declared;
+            declared = NULL;
+        }
+    }
+    xmlFree(declared);
+
+    PyObject *result = finish_parse(doc, restore || well_formed, restore ? 1 : 0);
+    if (result != NULL && (cfg.flags & XML_PARSE_XINCLUDE)
+        && run_xinclude(&cfg, LibXML_DOC(result)) < 0) {
+        Py_CLEAR(result);
+    }
+    config_clear(&cfg);
+    return result;
+}
+
+static PyObject *
+parser_finish_push(LibXML_ParserObject *self, PyObject *args, PyObject *kwds)
+{
+    int restore = 0;
+    static char *kwlist[] = {"restore", NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|p", kwlist, &restore)) return NULL;
+    if (push_refused(self)) return NULL;
+    return parser_finish(self, restore);
+}
+
+/* parse_chunk(chunk, terminate=False): with terminate, returns the document. */
+static PyObject *
+parser_parse_chunk(LibXML_ParserObject *self, PyObject *args, PyObject *kwds)
+{
+    PyObject *chunk = Py_None;
+    int terminate = 0;
+    static char *kwlist[] = {"chunk", "terminate", NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|Op", kwlist, &chunk, &terminate))
+        return NULL;
+    if (push_refused(self)) return NULL;
+
+    if (self->push_ctxt == NULL && push_start(self) < 0) return NULL;
+    if (push_one(self, chunk) < 0) return NULL;
+    if (terminate) return parser_finish(self, 0);
+    Py_RETURN_NONE;
+}
 
 static PyObject *
 parser_option_exists(LibXML_ParserObject *self, PyObject *args)
@@ -1255,6 +1520,15 @@ static void
 parser_dealloc(LibXML_ParserObject *self)
 {
     PyObject_GC_UnTrack(self);
+    if (self->push_ctxt != NULL) {
+        /* Input callbacks can be closed here, and they can raise. */
+        PyObject *type, *value, *tb;
+        PyErr_Fetch(&type, &value, &tb);
+        push_free(self);
+        if (PyErr_Occurred())
+            PyErr_WriteUnraisable((PyObject *)self);
+        PyErr_Restore(type, value, tb);
+    }
     Py_CLEAR(self->extra);
     Py_TYPE(self)->tp_free((PyObject *)self);
 }
@@ -1273,6 +1547,17 @@ static PyMethodDef LibXML_Parser_methods[] = {
     {"parse_html_fh",        (PyCFunction)parser_parse_html_fh,        METH_VARARGS|METH_KEYWORDS, "Parse HTML from a file object"},
     {"load_html",            (PyCFunction)parser_load_html,            METH_VARARGS|METH_KEYWORDS, "Load HTML (string=, location= or IO=), with options"},
     {"parse_balanced_chunk", (PyCFunction)parser_parse_balanced_chunk, METH_VARARGS,               "Parse a well-balanced XML fragment"},
+    {"parse_xml_chunk",      (PyCFunction)parser_parse_balanced_chunk, METH_VARARGS,               "Parse a well-balanced XML fragment"},
+    {"init_push",            (PyCFunction)parser_init_push,            METH_NOARGS,                "Start a push parse"},
+    {"push",                 (PyCFunction)parser_push,                 METH_VARARGS,               "Give chunks to the push parser"},
+    {"parse_chunk",          (PyCFunction)parser_parse_chunk,          METH_VARARGS|METH_KEYWORDS, "Give a chunk to the push parser, and finish if terminate is true"},
+    {"finish_push",          (PyCFunction)parser_finish_push,          METH_VARARGS|METH_KEYWORDS, "End the push parse and return the document"},
+    {"match_callback",       (PyCFunction)parser_match_callback,       METH_VARARGS,               "Get or set the match callback of this parser"},
+    {"open_callback",        (PyCFunction)parser_open_callback,        METH_VARARGS,               "Get or set the open callback of this parser"},
+    {"read_callback",        (PyCFunction)parser_read_callback,        METH_VARARGS,               "Get or set the read callback of this parser"},
+    {"close_callback",       (PyCFunction)parser_close_callback,       METH_VARARGS,               "Get or set the close callback of this parser"},
+    {"callbacks",            (PyCFunction)parser_callbacks,            METH_VARARGS,               "Get or set the four callbacks of this parser"},
+    {"input_callbacks",      (PyCFunction)parser_input_callbacks,      METH_VARARGS,               "Get or set the InputCallback of this parser"},
     {"process_xincludes",    (PyCFunction)parser_processXIncludes,     METH_VARARGS|METH_KEYWORDS, "Process the XIncludes of a document"},
     {"processXIncludes",     (PyCFunction)parser_processXIncludes,     METH_VARARGS|METH_KEYWORDS, "Process the XIncludes of a document"},
     {"load_catalog",         (PyCFunction)parser_load_catalog,         METH_VARARGS|METH_CLASS,    "Load a catalog, for all parsers"},
